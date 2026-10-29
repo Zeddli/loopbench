@@ -1,0 +1,9 @@
+{
+  "id": "nebius-nemotron",
+  "name": "NVIDIA Nemotron on Nebius",
+  "description": "Opt-in NVIDIA model inference on Nebius Token Factory. Requires explicit per-task token and price limits and NEBIUS_ALLOW_PAID=1.",
+  "command": "node",
+  "args": ["../node_modules/tsx/dist/cli.mjs", "../integrations/nebius-adapter.ts"],
+  "protocol": "loopbench.task.v1",
+  "timeoutMs": 100000
+}
