@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "templateId": "REPLACE_WITH_VERIFIED_IMMUTABLE_TEMPLATE_ID",
+  "network": {
+    "allowOut": [],
+    "denyOut": ["0.0.0.0/0", "::/0"],
+    "allowPublicTraffic": false
+  },
+  "maxLifetimeSeconds": 600,
+  "submission": "src/solution.cjs",
+  "evaluator": "benchmarks/evaluate.mjs",
+  "evaluatorIdentity": "Exact bytes included by loadBenchmark hash; never altered by hosted execution"
+}

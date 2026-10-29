@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "piVersion": "1.4.0",
+  "nodeVersion": "v24.15.0",
+  "templateId": "REPLACE_WITH_VERIFIED_IMMUTABLE_TEMPLATE_ID",
+  "verifierTemplateId": "REPLACE_WITH_VERIFIED_IMMUTABLE_VERIFIER_TEMPLATE_ID",
+  "supervisorSha256": "REPLACE_WITH_SHA256_OF_SUPERVISOR_BYTES",
+  "toolDefinitionsSha256": "REPLACE_WITH_SHA256_OF_REQUEST_IDENTITY_EXTENSION_BYTES",
+  "verifiedAt": "2026-10-28T00:00:00.000Z",
+  "cpuCount": 2,
+  "memoryMB": 4096
+}

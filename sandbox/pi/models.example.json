@@ -1,0 +1,18 @@
+{
+  "providers": {
+    "loopbench": {
+      "baseUrl": "https://gateway.example.invalid/api/hosted/gateway/v1",
+      "api": "openai-completions",
+      "apiKey": "${LOOPBENCH_GATEWAY_TOKEN}",
+      "models": [
+        {
+          "id": "EXACT_AUTHENTICATED_NEMOTRON_ID",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 32768,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}
