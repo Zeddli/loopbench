@@ -250,7 +250,17 @@ test("continuous process campaigns preserve lineage, checkpoints, budgets and st
         const resumed = await resumeEvolution(campaign.id, () => {}, 7);
         assert.equal(resumed.id, campaign.id);
         assert.equal(resumed.lineageId, campaign.lineageId);
-        assert.equal(resumed.completedRounds, 13);
+        assert.equal(
+          resumed.completedRounds,
+          13,
+          JSON.stringify({
+            status: resumed.status,
+            error: resumed.error,
+            callsUsed: resumed.callsUsed,
+            maxCalls: resumed.maxCalls,
+            lastCall: resumed.calls.at(-1),
+          }),
+        );
         assert.equal(resumed.callsUsed, 91);
         assert.equal(resumed.maxCalls, 91);
         assert.deepEqual(
@@ -274,7 +284,12 @@ test("continuous process campaigns preserve lineage, checkpoints, budgets and st
         assert.ok(lastDigest.evidence.length <= 40);
         assert.ok(lastDigest.archive.failedObservations > 0);
         assert.ok((resumed.proposerRuns.at(-1)?.digest.length || 0) <= 120000);
-        assert.ok(resumed.calls.every((call) => call.status === "completed"));
+        assert.ok(
+          resumed.calls.every((call) => call.status === "completed"),
+          JSON.stringify(
+            resumed.calls.filter((call) => call.status !== "completed"),
+          ),
+        );
         assert.equal((await listTrees()).length, originalTreeCount);
         const wrongDomain = await evolve({
           ...options,
