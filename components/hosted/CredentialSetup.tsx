@@ -119,8 +119,9 @@ export function CredentialSetup() {
       <p className="eyebrow">Private connection</p>
       <h1>Connect Nebius</h1>
       <p className="sub">
-        LoopBench supplies limited E2B compute. Your Nebius account pays for
-        model inference, within the allowance you review for each experiment.
+        LoopBench runs Pi with your selected sandbox provider. Your Nebius key
+        pays for model inference, within the allowance you review for each
+        experiment.
       </p>
       <form onSubmit={connect} className="hosted-form">
         <label className="field">

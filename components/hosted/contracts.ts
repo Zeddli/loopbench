@@ -23,6 +23,16 @@ export const credentialSchema = z.object({
   status: z.string(),
   revision: z.number().optional(),
 });
+export function preferredCredential(
+  credentials: z.infer<typeof credentialSchema>[],
+) {
+  return (
+    credentials.find((credential) => credential.status === "verified") ??
+    credentials.find((credential) =>
+      ["unverified", "unavailable"].includes(credential.status),
+    )
+  );
+}
 export const modelSchema = z.object({
   id: z.string(),
   name: z.string(),

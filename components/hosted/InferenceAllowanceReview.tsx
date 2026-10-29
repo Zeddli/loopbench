@@ -30,6 +30,8 @@ export function InferenceAllowanceReview({
   async function review() {
     setBusy(true);
     setMessage("");
+    setConsent(false);
+    setCatalog(null);
     try {
       const next = await api(
         `/api/hosted/models?campaignId=${encodeURIComponent(projection.campaign.id)}&refresh=true`,

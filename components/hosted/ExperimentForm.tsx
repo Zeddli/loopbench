@@ -12,6 +12,7 @@ import {
   harnessReadinessSchema,
   modelCatalogSchema,
   mutation,
+  preferredCredential,
   type ModelCatalog,
 } from "./contracts";
 import { BudgetReview } from "./BudgetReview";
@@ -25,6 +26,7 @@ export function ExperimentForm() {
   const [allowance, setAllowance] = useState("0.20");
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [refreshingPrices, setRefreshingPrices] = useState(false);
   const [error, setError] = useState("");
   const [runtime, setRuntime] = useState<z.infer<
     typeof harnessReadinessSchema
@@ -36,6 +38,12 @@ export function ExperimentForm() {
   const submittedBody = useRef("");
   useEffect(() => {
     let active = true;
+    setRefreshingPrices(true);
+    setCredentialId("");
+    setCatalog(null);
+    setModelId("");
+    setConsent(false);
+    setError("");
     ensureSession()
       .then(async () => {
         const [harness, suite, credentials] = await Promise.all([
@@ -53,19 +61,17 @@ export function ExperimentForm() {
         return credentials;
       })
       .then(async (credentials) => {
-        const credential = credentials.find(
-          (item) => item.status !== "revoked",
-        );
+        const credential = preferredCredential(credentials);
         if (!credential)
           throw new Error(
-            "Connect a Nebius key before starting an experiment.",
+            "Connect a valid Nebius key before starting an experiment.",
           );
+        if (active) setCredentialId(credential.id);
         const models = await api(
           `/api/hosted/models?credentialId=${encodeURIComponent(credential.id)}`,
           modelCatalogSchema,
         );
         if (active) {
-          setCredentialId(credential.id);
           setCatalog(models);
           setModelId(models.selectedModelId ?? "");
         }
@@ -77,6 +83,9 @@ export function ExperimentForm() {
               ? cause.message
               : "Setup could not be loaded.",
           );
+      })
+      .finally(() => {
+        if (active) setRefreshingPrices(false);
       });
     return () => {
       active = false;
@@ -84,10 +93,35 @@ export function ExperimentForm() {
   }, [provider]);
   const micros = allowanceMicros(allowance);
   const model = catalog?.models.find((item) => item.id === modelId);
+  async function refreshPrices() {
+    if (busy || refreshingPrices || !credentialId) return;
+    setRefreshingPrices(true);
+    setConsent(false);
+    setCatalog(null);
+    setModelId("");
+    setError("");
+    try {
+      const models = await api(
+        `/api/hosted/models?credentialId=${encodeURIComponent(credentialId)}&refresh=true`,
+        modelCatalogSchema,
+      );
+      setCatalog(models);
+      setModelId(models.selectedModelId ?? "");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Model prices could not be refreshed.",
+      );
+    } finally {
+      setRefreshingPrices(false);
+    }
+  }
   async function start(event: React.FormEvent) {
     event.preventDefault();
     if (
       busy ||
+      refreshingPrices ||
       !consent ||
       !model?.pricingSnapshotId ||
       !micros ||
@@ -120,6 +154,7 @@ export function ExperimentForm() {
       );
       router.push(`/experiments/${encodeURIComponent(accepted.campaignId)}`);
     } catch (cause) {
+      setConsent(false);
       setError(
         cause instanceof Error
           ? cause.message
@@ -142,7 +177,7 @@ export function ExperimentForm() {
             <span>Sandbox provider</span>
             <select
               value={provider}
-              disabled={busy}
+              disabled={busy || refreshingPrices}
               onChange={(event) => {
                 setProvider(event.target.value);
                 setRuntime(null);
@@ -164,7 +199,7 @@ export function ExperimentForm() {
                 setModelId(event.target.value);
                 setConsent(false);
               }}
-              disabled={busy}
+              disabled={busy || refreshingPrices}
             >
               <option value="">No compatible model selected</option>
               {catalog?.models.map((item) => (
@@ -195,7 +230,7 @@ export function ExperimentForm() {
                 setAllowance(event.target.value);
                 setConsent(false);
               }}
-              disabled={busy}
+              disabled={busy || refreshingPrices}
               required
             />
           </label>
@@ -204,6 +239,16 @@ export function ExperimentForm() {
           Coding · Pi 1.4.0 · coding-adversarial-v1.{" "}
           <Link href="/setup">Change connection →</Link>
         </p>
+        {credentialId && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={refreshPrices}
+            disabled={busy || refreshingPrices}
+          >
+            {refreshingPrices ? "Refreshing prices…" : "Refresh model prices"}
+          </button>
+        )}
         {catalog && (
           <BudgetReview
             catalog={catalog}
@@ -240,7 +285,7 @@ export function ExperimentForm() {
             type="checkbox"
             checked={consent}
             onChange={(event) => setConsent(event.target.checked)}
-            disabled={busy}
+            disabled={busy || refreshingPrices}
           />{" "}
           I approve this inference allowance and the displayed prices for this
           private experiment.
@@ -249,6 +294,7 @@ export function ExperimentForm() {
           className="btn btn-primary"
           disabled={
             busy ||
+            refreshingPrices ||
             !consent ||
             !micros ||
             !model?.pricingSnapshotId ||
