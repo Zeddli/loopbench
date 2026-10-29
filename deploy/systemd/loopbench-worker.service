@@ -1,0 +1,27 @@
+[Unit]
+Description=LoopBench durable Pi evolution worker
+After=network-online.target loopbench-web.service loopbench-reaper.service
+Wants=network-online.target loopbench-web.service loopbench-reaper.service
+RequiresMountsFor=/var/lib/loopbench
+
+[Service]
+Type=simple
+User=loopbench
+Group=loopbench
+WorkingDirectory=/opt/loopbench/current
+EnvironmentFile=/etc/loopbench/worker.env
+ExecStartPre=/usr/bin/node --import tsx scripts/hosted-preflight.ts
+ExecStart=/usr/bin/node --import tsx scripts/hosted-worker.ts
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=650
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/loopbench
+
+[Install]
+WantedBy=multi-user.target

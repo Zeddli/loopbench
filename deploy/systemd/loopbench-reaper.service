@@ -1,0 +1,27 @@
+[Unit]
+Description=LoopBench owned E2B reconciliation and cleanup
+After=network-online.target
+Wants=network-online.target
+Before=loopbench-worker.service
+RequiresMountsFor=/var/lib/loopbench
+
+[Service]
+Type=simple
+User=loopbench
+Group=loopbench
+WorkingDirectory=/opt/loopbench/current
+EnvironmentFile=/etc/loopbench/worker.env
+ExecStart=/usr/bin/node --import tsx scripts/hosted-reaper.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/loopbench
+
+[Install]
+WantedBy=multi-user.target

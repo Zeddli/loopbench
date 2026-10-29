@@ -1,0 +1,15 @@
+loopbench.example.com {
+    request_body {
+        max_size 1MB
+    }
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        Strict-Transport-Security "max-age=31536000"
+        -Server
+    }
+    reverse_proxy 127.0.0.1:3000 {
+        flush_interval -1
+        header_up X-Forwarded-For {remote_host}
+    }
+}
