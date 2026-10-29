@@ -13,6 +13,7 @@ import type { ComputePolicyEvidence } from "../hosted/operations";
 import { HostedError } from "../hosted/schema";
 import type { TaskAttemptResult } from "../hosted/attempts";
 import { savePricingSnapshot } from "../hosted/pricing";
+import { loadBenchmark } from "../core/benchmarks";
 
 function fullSchedulerFixture() {
   const f = fixture();
@@ -80,6 +81,7 @@ function fullSchedulerFixture() {
     visibleNodes: number;
   }[] = [];
   const dependencies: WorkerDependencies = {
+    loadBenchmark,
     loadHarness: async () => base,
     refreshPrices: async () => undefined,
     verifyComputePolicy: () => computeEvidence,
@@ -183,6 +185,151 @@ function fullSchedulerFixture() {
     },
   };
 }
+
+test("baseline keeps its persisted harness when the approved harness changes between task checkpoints", async () => {
+  const f = fullSchedulerFixture();
+  try {
+    await f.step(); // probe
+    await f.step(); // first baseline task
+    const baseline = listVersionNodes(f.input, f.context)[0];
+    assert(baseline);
+    const original = await f.dependencies.loadHarness({
+      templateId: "isolated-template",
+    });
+    f.dependencies.loadHarness = async () => ({
+      ...original,
+      systemPrompt: "A newly approved but different strategy.",
+    });
+    const runAttempt = f.dependencies.runTaskAttempt;
+    let executedPrompt = "";
+    f.dependencies.runTaskAttempt = async (request, context) => {
+      executedPrompt = request.harness.systemPrompt;
+      return runAttempt(request, context);
+    };
+    await f.step();
+    assert.equal(executedPrompt, original.systemPrompt);
+    assert.equal(
+      listVersionNodes(f.input, f.context)[0]?.harnessHash,
+      baseline.harnessHash,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+for (const phase of ["baseline", "parent", "candidate"]) {
+  test(`${phase} refuses changed benchmark or grader identity before another task executes`, async () => {
+    const f = fullSchedulerFixture();
+    try {
+      let current = await f.step();
+      while (
+        current.checkpoint.phase !== phase ||
+        current.checkpoint.taskIndex !== 1
+      )
+        current = await f.step();
+      const count = f.attempts.length;
+      f.dependencies.loadBenchmark = async (path) => ({
+        ...(await loadBenchmark(path)),
+        hash: "changed-benchmark-and-grader-identity",
+      });
+      f.advance(100);
+      await workerTick("identity-regression-worker", f.context, f.dependencies);
+      assert.equal(f.attempts.length, count);
+      assert.equal(getCampaign(f.input, f.context)?.status, "waiting");
+      assert.equal(
+        f.context.db
+          .prepare("SELECT last_error_code FROM jobs WHERE campaign_id=?")
+          .get(f.campaign.id)?.last_error_code,
+        "COMPARISON_CONTEXT_MISMATCH",
+      );
+      assert.equal(
+        listVersionNodes(f.input, f.context).some(
+          (node) => node.status === "accepted",
+        ),
+        false,
+      );
+    } finally {
+      f.close();
+    }
+  });
+}
+
+for (const changedCondition of ["call_limit", "runtime"]) {
+  test(`paired comparison refuses changed ${changedCondition} before the candidate executes`, async () => {
+    const f = fullSchedulerFixture();
+    try {
+      let current = await f.step();
+      while (current.checkpoint.phase !== "candidate") current = await f.step();
+      const count = f.attempts.length;
+      if (changedCondition === "call_limit") {
+        f.context.db
+          .prepare("UPDATE campaigns SET config_json=? WHERE id=?")
+          .run(
+            JSON.stringify({ ...current.config, maxCallsPerTask: 12 }),
+            f.campaign.id,
+          );
+      } else {
+        const proposal = f.context.db
+          .prepare(
+            "SELECT id,harness_json FROM hosted_proposals WHERE campaign_id=? AND round=? AND ordinal=?",
+          )
+          .get(
+            f.campaign.id,
+            Number(current.checkpoint.round),
+            Number(current.checkpoint.proposalIndex),
+          );
+        assert(proposal);
+        const harness = validateHarnessArtifact(
+          JSON.parse(String(proposal.harness_json)),
+        );
+        harness.runtime.templateId = "different-runtime";
+        f.context.db
+          .prepare("UPDATE hosted_proposals SET harness_json=? WHERE id=?")
+          .run(JSON.stringify(harness), String(proposal.id));
+      }
+      f.advance(100);
+      await workerTick(
+        "condition-regression-worker",
+        f.context,
+        f.dependencies,
+      );
+      assert.equal(f.attempts.length, count);
+      assert.equal(getCampaign(f.input, f.context)?.status, "waiting");
+      assert.equal(
+        f.context.db
+          .prepare("SELECT last_error_code FROM jobs WHERE campaign_id=?")
+          .get(f.campaign.id)?.last_error_code,
+        "COMPARISON_CONTEXT_MISMATCH",
+      );
+    } finally {
+      f.close();
+    }
+  });
+}
+
+test("legacy partial baseline derives its execution pin from the saved version before resuming", async () => {
+  const f = fullSchedulerFixture();
+  try {
+    await f.step();
+    const current = await f.step();
+    const legacyCheckpoint = { ...current.checkpoint };
+    delete legacyCheckpoint.executionContextHash;
+    f.context.db
+      .prepare("UPDATE campaigns SET checkpoint_json=? WHERE id=?")
+      .run(JSON.stringify(legacyCheckpoint), f.campaign.id);
+    const baseline = listVersionNodes(f.input, f.context)[0];
+    assert(baseline);
+    delete baseline.config.settings.executionContextHash;
+    f.context.db
+      .prepare("UPDATE hosted_versions SET node_json=? WHERE id=?")
+      .run(JSON.stringify(baseline), baseline.id);
+    const resumed = await f.step();
+    assert.equal(resumed.checkpoint.taskIndex, 2);
+    assert.equal(typeof resumed.checkpoint.executionContextHash, "string");
+  } finally {
+    f.close();
+  }
+});
 
 test("invalid optimizer hypotheses receive metered-step feedback without inserting partial branches", async () => {
   const f = fullSchedulerFixture();

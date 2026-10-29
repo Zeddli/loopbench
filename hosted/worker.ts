@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { loadBenchmark } from "../core/benchmarks";
@@ -79,11 +79,13 @@ const checkpointSchema = z.object({
   candidateTasks: z.array(taskResultSchema).default([]),
   roundEnvelopeId: z.string().optional(),
   mastered: z.boolean().default(false),
+  executionContextHash: z.string().optional(),
 });
 type Checkpoint = z.infer<typeof checkpointSchema>;
 export interface WorkerDependencies {
   jobId?: string;
   loadHarness: typeof loadApprovedHarness;
+  loadBenchmark: typeof loadBenchmark;
   runTaskAttempt: typeof runTaskAttempt;
   probe: typeof probeNemotron;
   propose: typeof proposeHarnessBranches;
@@ -106,6 +108,31 @@ function nodeById(nodes: NodeRecord[], id: string | null): NodeRecord {
   const node = nodes.find((node) => node.id === id);
   if (!node) throw new Error("Missing version ancestry");
   return node;
+}
+function executionContextHash(input: {
+  benchmarkHash: string;
+  modelId: string;
+  harness: HarnessArtifact;
+  maxCalls: number;
+  tokenFactory: boolean;
+}) {
+  // loadBenchmark's hash includes the task definition, grader and controller bytes.
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        benchmarkHash: input.benchmarkHash,
+        modelId: input.modelId,
+        runtime: input.harness.runtime,
+        tools: input.harness.tools,
+        contextWindow: 131072,
+        maxTokens: 4096,
+        maxCalls: input.maxCalls,
+        provider: input.tokenFactory ? "tokenfactory" : "e2b",
+        inferenceProtocol: "nebius-non-thinking-v1",
+        submissionPolicy: canonicalSubmissionPolicy,
+      }),
+    )
+    .digest("hex");
 }
 function persistNode(
   node: NodeRecord,
@@ -178,6 +205,7 @@ function createNode(input: {
         completionPolicy:
           "settled output requires a canonical submission; trusted missing-leaf receipts fail the task, available artifacts receive fresh verification; provider failures never scored",
         inferenceProtocol: "nebius-non-thinking-v1",
+        executionContextHash: input.point.executionContextHash ?? "",
       },
     },
     status: "running",
@@ -397,7 +425,7 @@ export async function runHostedStep(
     checkpoint(lease, point, context);
     return;
   }
-  const benchmark = await loadBenchmark(
+  const benchmark = await (dependencies.loadBenchmark ?? loadBenchmark)(
     point.benchmarkPath ?? "coding-adversarial-v1",
   );
   const nodes = listVersionNodes(lease, context);
@@ -529,6 +557,44 @@ export async function runHostedStep(
       context,
     );
     hypothesis = `Independent curriculum level ${point.level}: test the current harness on harder cases`;
+  } else if (versionId) {
+    harness = getVersionHarness({ ...lease, nodeId: versionId }, context);
+  }
+  const currentContextHash = executionContextHash({
+    benchmarkHash: benchmark.hash,
+    modelId: campaign.modelId,
+    harness,
+    maxCalls: Number(campaign.config.maxCallsPerTask ?? 8),
+    tokenFactory,
+  });
+  const anchor =
+    nodes.find((node) => node.id === versionId) ??
+    (point.phase === "parent" || point.phase === "candidate"
+      ? nodes.find((node) => node.id === point.roundParentId)
+      : undefined);
+  // Older resumable checkpoints derive their pin from the immutable version.
+  // Parent reruns have no visible node until the candidate starts.
+  const recordedContextHash =
+    point.executionContextHash ??
+    (anchor
+      ? anchor.config.settings.executionContextHash ||
+        executionContextHash({
+          benchmarkHash: anchor.config.benchmarkHash,
+          modelId: anchor.config.model,
+          harness: getVersionHarness({ ...lease, nodeId: anchor.id }, context),
+          maxCalls: Number(anchor.config.settings.agentCallLimit ?? 8),
+          tokenFactory: anchor.config.adapterId === "tokenfactory-pi",
+        })
+      : undefined);
+  if (recordedContextHash && recordedContextHash !== currentContextHash)
+    throw new HostedError(
+      "COMPARISON_CONTEXT_MISMATCH",
+      "Benchmark, grader, model or execution conditions changed during this evaluation. Resume requires the pinned conditions.",
+      503,
+    );
+  if (!point.executionContextHash) {
+    point.executionContextHash = currentContextHash;
+    checkpoint(lease, point, context);
   }
   if (!versionId) {
     versionId = randomUUID();
@@ -903,6 +969,7 @@ export async function runHostedStep(
     point.championId = versionId;
     point.phase = "propose";
     point.activeNodeId = null;
+    delete point.executionContextHash;
     checkpoint(lease, point, context);
     return;
   }
@@ -960,6 +1027,7 @@ export async function runHostedStep(
     point.benchmarkPath = next.path;
     point.phase = "challenge";
   } else point.phase = "propose";
+  delete point.executionContextHash;
   checkpoint(lease, point, context);
 }
 export function waitReasonFor(error: unknown): WaitReason {
