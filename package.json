@@ -1,0 +1,45 @@
+{
+  "name": "loopbench",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "cli": "tsx cli/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "hosted:init": "node --import tsx scripts/hosted-init.ts",
+    "hosted:preflight": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-preflight.ts",
+    "hosted:worker": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-worker.ts",
+    "hosted:reaper": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-reaper.ts",
+    "hosted:status": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-status.ts",
+    "hosted:approve-runtime": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-approve-runtime.ts",
+    "hosted:grant-compute": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-grant-compute.ts",
+    "hosted:export-lessons": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-export-lessons.ts",
+    "hosted:verify": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-verify.ts",
+    "hosted:probe-runtime": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-probe-runtime.ts",
+    "hosted:build-runtime": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-build-runtime.ts",
+    "hosted:smoke": "node --env-file-if-exists=.env.local --import tsx scripts/hosted-live-smoke.ts",
+    "hosted:token-runtime": "node --env-file-if-exists=.env.local --import tsx scripts/tokenfactory-runtime.ts",
+    "hosted:token-probe": "node --env-file-if-exists=.env.local --import tsx scripts/tokenfactory-controller-probe.ts",
+    "hosted:token-pilot": "node --env-file-if-exists=.env.local --import tsx scripts/tokenfactory-pilot.ts"
+  },
+  "dependencies": {
+    "e2b": "2.61.0",
+    "geist": "^1.8.2",
+    "next": "16.4.3",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

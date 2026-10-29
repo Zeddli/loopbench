@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.loopbench/
+.env*
+!.env.example
+!.env.hosted.example
+*.tsbuildinfo
+artifacts/
+sandbox/pi/runner-manifest.json
