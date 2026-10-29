@@ -23,21 +23,73 @@ const resultSchema = z.object({
   stdout: streamSchema.optional(),
   stderr: streamSchema.optional(),
 });
+export class TokenSandboxHttpError extends Error {
+  constructor(readonly httpStatus: number) {
+    super(`Token Factory sandbox request failed (${httpStatus})`);
+    this.name = "TokenSandboxHttpError";
+  }
+}
+export class TokenSandboxProcessError extends Error {
+  constructor(
+    readonly processExitCode: number,
+    readonly processFailure:
+      | "timed_out"
+      | "signaled"
+      | "output_truncated"
+      | "not_settled"
+      | "heap_exhausted",
+    readonly processSignal?: number,
+  ) {
+    super(
+      processFailure === "not_settled"
+        ? "Token Factory subprocess is not settled"
+        : "Token Factory process interrupted or output truncated",
+    );
+    this.name = "TokenSandboxProcessError";
+  }
+}
+function subprocessRunning(result: z.infer<typeof resultSchema>): boolean {
+  // HTTP 200 is a current event-log snapshot, not a completion guarantee.
+  // https://docs.tokenfactory.nebius.com/api-reference/sandboxes/operation/result-of-one-subprocess-reconstructed-from-its-events
+  return (
+    result.state.exit_code === -1 &&
+    (result.state.signal ?? -1) === -1 &&
+    !result.state.timed_out
+  );
+}
 export function decodeProcessResult(raw: unknown): RemoteCommandResult {
   const result = resultSchema.parse(raw);
-  if (
-    result.state.timed_out ||
-    (result.state.signal ?? -1) > 0 ||
-    result.stdout?.truncated ||
-    result.stderr?.truncated
-  )
-    throw new Error("Token Factory process interrupted or output truncated");
   const decode = (s: z.infer<typeof streamSchema> | undefined) =>
     !s
       ? ""
       : s.encoding === "base64"
         ? Buffer.from(s.value, "base64").toString("utf8")
         : s.value;
+  if (subprocessRunning(result))
+    throw new TokenSandboxProcessError(
+      result.state.exit_code,
+      "not_settled",
+      result.state.signal,
+    );
+  if (
+    result.state.timed_out ||
+    (result.state.signal ?? -1) > 0 ||
+    result.stdout?.truncated ||
+    result.stderr?.truncated
+  )
+    throw new TokenSandboxProcessError(
+      result.state.exit_code,
+      result.state.timed_out
+        ? "timed_out"
+        : (result.state.signal ?? -1) > 0
+          ? /FATAL ERROR:.*(?:heap|allocation).*memory|Reached heap limit|JavaScript heap out of memory/i.test(
+              decode(result.stderr),
+            )
+            ? "heap_exhausted"
+            : "signaled"
+          : "output_truncated",
+      result.state.signal,
+    );
   return {
     exitCode: result.state.exit_code,
     stdout: decode(result.stdout),
@@ -128,8 +180,7 @@ export class TokenSandboxClient {
   }
   async json(route: string, method = "GET", body?: unknown): Promise<unknown> {
     const r = await this.call(route, method, body);
-    if (!r.ok)
-      throw new Error(`Token Factory sandbox request failed (${r.status})`);
+    if (!r.ok) throw new TokenSandboxHttpError(r.status);
     return r.json();
   }
   async spawn(input: TokenSpawn): Promise<string> {
@@ -163,10 +214,7 @@ export class TokenSandboxClient {
         await delay(readinessDelay(response, deadline));
         continue;
       }
-      if (!response.ok)
-        throw new Error(
-          `Token Factory operation status unavailable (${response.status})`,
-        );
+      if (!response.ok) throw new TokenSandboxHttpError(response.status);
       return tokenOperationSchema.parse(await response.json());
     }
     throw new Error(
@@ -186,8 +234,7 @@ export class TokenSandboxClient {
   }
   async cancel(id: string): Promise<void> {
     const r = await this.call(`/operations/${z.uuid().parse(id)}`, "DELETE");
-    if (!r.ok && r.status !== 404)
-      throw new Error(`Sandbox cancellation not confirmed (${r.status})`);
+    if (!r.ok && r.status !== 404) throw new TokenSandboxHttpError(r.status);
   }
   async startChild(id: string, command: TokenExec): Promise<number> {
     const route = `/operations/${z.uuid().parse(id)}/subprocesses`;
@@ -200,10 +247,7 @@ export class TokenSandboxClient {
         await delay(readinessDelay(response, deadline));
         continue;
       }
-      if (!response.ok)
-        throw new Error(
-          `Token Factory sandbox request failed (${response.status})`,
-        );
+      if (!response.ok) throw new TokenSandboxHttpError(response.status);
       return z
         .object({ spid: z.number().int().min(2) })
         .parse(await response.json()).spid;
@@ -226,14 +270,21 @@ export class TokenSandboxClient {
         await delay(readinessDelay(r, deadline));
         continue;
       }
-      if (!r.ok)
-        throw new Error(`Sandbox subprocess result unavailable (${r.status})`);
+      if (!r.ok) throw new TokenSandboxHttpError(r.status);
       const raw: unknown = await r.json();
       const parsed = resultSchema.safeParse(raw);
-      if (parsed.success) return decodeProcessResult(parsed.data);
       const wrapper = z.object({ result: resultSchema }).safeParse(raw);
-      if (wrapper.success) return decodeProcessResult(wrapper.data.result);
-      throw new Error("Malformed sandbox subprocess result");
+      const result = parsed.success
+        ? parsed.data
+        : wrapper.success
+          ? wrapper.data.result
+          : null;
+      if (!result) throw new Error("Malformed sandbox subprocess result");
+      if (subprocessRunning(result)) {
+        await delay(readinessDelay(r, deadline));
+        continue;
+      }
+      return decodeProcessResult(result);
     }
     throw new Error("Sandbox subprocess wait expired; not replayed");
   }

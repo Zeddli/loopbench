@@ -139,3 +139,137 @@ test("subprocess creation retries only an explicitly rejected 425 and never an a
     }
   }
 });
+
+test("subprocess HTTP failure exposes only fixed numeric status and never response text", async () => {
+  const client = new TokenSandboxClient({
+    apiKey: "test",
+    projectId: "test",
+    fetch: async () => new Response("PRIVATE-UPSTREAM-BODY", { status: 504 }),
+  });
+  await assert.rejects(
+    client.startChild("00000000-0000-4000-8000-000000000001", {
+      command: "/bin/true",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal("httpStatus" in error ? error.httpStatus : undefined, 504);
+      assert.equal(JSON.stringify(error).includes("PRIVATE-"), false);
+      assert.equal(error.message.includes("PRIVATE-"), false);
+      return true;
+    },
+  );
+});
+
+test("interrupted process exposes safe state fields without subprocess output", () => {
+  assert.throws(
+    () =>
+      decodeProcessResult({
+        state: { exit_code: 137, signal: 9, timed_out: false },
+        stdout: { value: "PRIVATE-STDOUT" },
+        stderr: { value: "PRIVATE-STDERR" },
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(
+        "processExitCode" in error ? error.processExitCode : undefined,
+        137,
+      );
+      assert.equal(
+        "processFailure" in error ? error.processFailure : undefined,
+        "signaled",
+      );
+      assert.equal(JSON.stringify(error).includes("PRIVATE-"), false);
+      return true;
+    },
+  );
+});
+
+test("a signaled Node heap failure retains its fixed category but no stderr", () => {
+  assert.throws(
+    () =>
+      decodeProcessResult({
+        state: { exit_code: -1, signal: 6 },
+        stderr: {
+          value:
+            "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory PRIVATE-INPUT",
+        },
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(
+        "processFailure" in error ? error.processFailure : undefined,
+        "heap_exhausted",
+      );
+      assert.equal(JSON.stringify(error).includes("PRIVATE-INPUT"), false);
+      return true;
+    },
+  );
+});
+
+test("HTTP 200 running subprocess snapshots require bounded GET polling without another POST", async () => {
+  let posts = 0,
+    gets = 0;
+  const client = new TokenSandboxClient({
+    apiKey: "test",
+    projectId: "test",
+    fetch: async (_url, init) => {
+      if (init?.method === "POST") {
+        posts++;
+        return Response.json({ spid: 2 }, { status: 201 });
+      }
+      gets++;
+      return Response.json(
+        gets < 3
+          ? {
+              state: { exit_code: -1, signal: -1, timed_out: false },
+              stdout: { value: "incomplete" },
+            }
+          : {
+              state: { exit_code: 0, signal: -1, timed_out: false },
+              stdout: { value: "complete" },
+            },
+      );
+    },
+  });
+  const result = await client.runChild(
+    "00000000-0000-4000-8000-000000000001",
+    { command: "/bin/true" },
+    2000,
+  );
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "complete");
+  assert.equal(posts, 1);
+  assert.equal(gets, 3);
+});
+
+test("a running subprocess snapshot cannot be decoded as a completed command", () => {
+  assert.throws(
+    () =>
+      decodeProcessResult({
+        state: { exit_code: -1, signal: -1, timed_out: false },
+      }),
+    /not settled/,
+  );
+});
+
+test("running subprocess polling stops at its deadline and terminal signals are never retried", async () => {
+  for (const signal of [-1, 6]) {
+    let gets = 0;
+    const client = new TokenSandboxClient({
+      apiKey: "test",
+      projectId: "test",
+      fetch: async (_url, init) => {
+        assert.equal(init?.method, "GET");
+        gets++;
+        return Response.json({
+          state: { exit_code: -1, signal, timed_out: false },
+        });
+      },
+    });
+    await assert.rejects(
+      client.waitChild("00000000-0000-4000-8000-000000000001", 2, 30),
+      signal === -1 ? /wait expired/ : /interrupted/,
+    );
+    assert.equal(gets, 1);
+  }
+});
