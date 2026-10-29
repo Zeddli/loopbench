@@ -29,6 +29,7 @@ export const publishedTreeSchema = z
           ])
           .optional(),
         round: z.number().int().nonnegative().optional(),
+        level: z.number().int().nonnegative().optional(),
         tasksCompleted: z.number().int().nonnegative().optional(),
         taskTotal: z.number().int().positive().optional(),
         proposalIndex: z.number().int().nonnegative().optional(),
@@ -74,6 +75,7 @@ export function publicationProgress(
       .optional()
       .parse(campaign.checkpoint.phase),
     round: count(campaign.checkpoint.round),
+    level: count(campaign.checkpoint.level),
     tasksCompleted: count(campaign.checkpoint.taskIndex),
     taskTotal,
     proposalIndex: count(campaign.checkpoint.proposalIndex),

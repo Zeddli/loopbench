@@ -4,6 +4,7 @@ import { api } from "./contracts";
 import { publishedSnapshotSchema } from "@/hosted/publication-schema";
 import { HarnessView } from "./HarnessView";
 import { LearningRecord } from "../LearningRecord";
+import { PublishedProgress } from "./PublishedProgress";
 import type { PublishedSnapshot } from "@/hosted/publication";
 export function PublishedWorkspace({
   snapshot: original,
@@ -94,38 +95,23 @@ export function PublishedWorkspace({
               </button>
             </p>
           )}
-          {snapshot.tree.execution && (
-            <p role="status">
-              Campaign: {snapshot.tree.execution.status.replaceAll("_", " ")}
-              {snapshot.tree.execution.waitReason
-                ? ` · ${snapshot.tree.execution.waitReason.replaceAll("_", " ")}`
-                : ""}{" "}
-              · observed {snapshot.tree.execution.observedAt.replace("T", " ")}
-            </p>
-          )}
           {connection && <p role="status">{connection}</p>}
-          {snapshot.tree.execution?.phase && (
-            <p className="muted">
-              {snapshot.tree.execution.phase === "parent"
-                ? "Fresh parent evaluation"
-                : snapshot.tree.execution.phase === "candidate"
-                  ? "Candidate evaluation"
-                  : snapshot.tree.execution.phase === "propose"
-                    ? "Generating competing hypotheses"
-                    : snapshot.tree.execution.phase}{" "}
-              · round {snapshot.tree.execution.round ?? 0}
-              {snapshot.tree.execution.phase !== "propose" &&
-                ` · ${snapshot.tree.execution.tasksCompleted ?? 0}/${snapshot.tree.execution.taskTotal ?? snapshot.tree.totalTasks} tasks complete`}
-              {!!snapshot.tree.execution.proposalCount &&
-                ` · hypothesis ${(snapshot.tree.execution.proposalIndex ?? 0) + 1}/${snapshot.tree.execution.proposalCount}`}
-            </p>
-          )}
           <p className="muted">
             Historical runtime and model labels describe the original evidence.
             This snapshot does not authorize a hosted continuation.
           </p>
         </div>
       </div>
+      {snapshot.tree.execution && (
+        <PublishedProgress
+          execution={snapshot.tree.execution}
+          totalTasks={snapshot.tree.totalTasks}
+          scoredVersions={
+            snapshot.tree.nodes.filter((entry) => entry.score !== null).length
+          }
+          following={follow}
+        />
+      )}
       {snapshot.tree.nodes.length ? (
         <>
           <HarnessView

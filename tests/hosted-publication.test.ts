@@ -109,7 +109,10 @@ test("same-campaign public follow retains immutable history and updated executio
   }
 });
 import { randomUUID } from "node:crypto";
-import { publicationProgress } from "../hosted/publication-schema";
+import {
+  publicationProgress,
+  publishedTreeSchema,
+} from "../hosted/publication-schema";
 import { nodeRecordSchema } from "../core/types";
 
 test("published progress changes for fresh-parent task progress without leaking private checkpoint fields", () => {
@@ -120,12 +123,14 @@ test("published progress changes for fresh-parent task progress without leaking 
       checkpoint: {
         phase: "parent",
         round: 1,
+        level: 2,
         taskIndex: 1,
         proposalIndex: 0,
         privateToken: "never-publish",
       },
     },
     6,
+    18,
   );
   const next = publicationProgress(
     {
@@ -134,16 +139,26 @@ test("published progress changes for fresh-parent task progress without leaking 
       checkpoint: {
         phase: "parent",
         round: 1,
+        level: 2,
         taskIndex: 2,
         proposalIndex: 0,
         privateToken: "never-publish",
       },
     },
     6,
+    18,
   );
   assert.notEqual(JSON.stringify(first), JSON.stringify(next));
   assert.equal(next.tasksCompleted, 2);
   assert.equal(next.proposalCount, 6);
+  assert.equal(next.level, 2);
+  assert.equal(next.taskTotal, 18);
+  const serialized = publishedTreeSchema.shape.execution.parse({
+    ...next,
+    observedAt: "2026-10-29T01:00:00Z",
+  });
+  assert.equal(serialized?.level, 2);
+  assert.equal(serialized?.taskTotal, 18);
   assert(!JSON.stringify(next).includes("never-publish"));
   assert(!("privateToken" in next));
 });
