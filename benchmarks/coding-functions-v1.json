@@ -1,0 +1,42 @@
+{
+  "id": "coding-functions-v1",
+  "name": "Coding functions · 3 tasks",
+  "domain": "coding",
+  "tasks": [
+    {
+      "id": "unique-stable",
+      "nonMutating": true,
+      "prompt": "Write a JavaScript function uniqueStable(values) that returns an array of the unique string or number values in first-occurrence order. Input is an array; do not mutate it. Empty input returns []. Return only JavaScript, using module.exports = function(values) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "args": [[]], "expected": [] },
+        { "args": [[3, 1, 3, 2, 1]], "expected": [3, 1, 2] },
+        { "args": [["a", "a", "b", "a"]], "expected": ["a", "b"] },
+        { "args": [[1, "1", 0, 1, "1", 0]], "expected": [1, "1", 0] }
+      ]
+    },
+    {
+      "id": "chunk-array",
+      "nonMutating": true,
+      "prompt": "Write a JavaScript function chunkArray(values, size) that splits an array into consecutive chunks of at most size elements. size is an integer; if size <= 0 return []. Do not mutate values. Empty input returns []. Return only JavaScript, using module.exports = function(values, size) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "args": [[], 2], "expected": [] },
+        { "args": [[1, 2, 3, 4, 5], 2], "expected": [[1, 2], [3, 4], [5]] },
+        { "args": [[1, 2], 0], "expected": [] },
+        { "args": [[1, 2], -3], "expected": [] },
+        { "args": [["a", "b"], 9], "expected": [["a", "b"]] }
+      ]
+    },
+    {
+      "id": "balanced-brackets",
+      "prompt": "Write a JavaScript function balancedBrackets(text) returning true when (), [] and {} brackets are correctly matched and nested; ignore all other characters. Empty text is balanced. Return only JavaScript, using module.exports = function(text) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "args": [""], "expected": true },
+        { "args": ["a{b[c(d)e]f}"], "expected": true },
+        { "args": ["([)]"], "expected": false },
+        { "args": ["]"], "expected": false },
+        { "args": ["((x)"], "expected": false },
+        { "args": ["plain text"], "expected": true }
+      ]
+    }
+  ]
+}

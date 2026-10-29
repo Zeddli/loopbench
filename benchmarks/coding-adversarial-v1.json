@@ -1,0 +1,518 @@
+{
+  "id": "coding-adversarial-v1",
+  "name": "Adversarial coding contracts · 6 tasks",
+  "domain": "coding",
+  "tasks": [
+    {
+      "id": "strict-csv",
+      "nonMutating": true,
+      "prompt": "Implement parseCSV(text), returning an array of records, each an array of string fields, or null for malformed CSV. Empty text returns []. Comma separates fields. LF and CRLF separate records; bare CR outside quoted fields is malformed. A single final record separator does not create an extra record; other blank records have one empty field. Preserve whitespace literally. A field beginning with double quote is quoted: commas and any newline characters inside are literal; doubled double quotes represent one quote. A closing quote may be followed only by comma, record separator or end of input. Quotes anywhere in an unquoted field, unclosed quotes, and extra characters after a closing quote are malformed. A trailing comma creates an empty final field. Do not mutate inputs. Return only JavaScript using module.exports = function(text) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "label": "empty document", "args": [""], "expected": [] },
+        {
+          "label": "plain records and final separator",
+          "args": ["a,b\r\nc,d\r\n"],
+          "expected": [
+            ["a", "b"],
+            ["c", "d"]
+          ]
+        },
+        {
+          "label": "quoted comma and escaped quote",
+          "args": ["\"a,b\",\"say \"\"hi\"\"\""],
+          "expected": [["a,b", "say \"hi\""]]
+        },
+        {
+          "label": "quoted multiline field",
+          "args": ["\"line1\r\nline2\",x\ny,z"],
+          "expected": [
+            ["line1\r\nline2", "x"],
+            ["y", "z"]
+          ]
+        },
+        {
+          "label": "empty trailing field",
+          "args": ["a,"],
+          "expected": [["a", ""]]
+        },
+        {
+          "label": "blank records",
+          "args": ["\n\n"],
+          "expected": [[""], [""]]
+        },
+        {
+          "label": "whitespace is literal",
+          "args": [" a , b "],
+          "expected": [[" a ", " b "]]
+        },
+        { "label": "unclosed quote", "args": ["\"a,b"], "expected": null },
+        {
+          "label": "quote inside unquoted field",
+          "args": ["ab\"c,d"],
+          "expected": null
+        },
+        {
+          "label": "characters after closing quote",
+          "args": ["\"a\" b,c"],
+          "expected": null
+        },
+        { "label": "bare carriage return", "args": ["a\rb"], "expected": null },
+        {
+          "label": "quoted empty field",
+          "args": ["\"\","],
+          "expected": [["", ""]]
+        }
+      ]
+    },
+    {
+      "id": "json-pointer-patch",
+      "nonMutating": true,
+      "prompt": "Implement applyPatch(document, operations). Apply the operations sequentially to a deep copy of the JSON document and return the resulting JSON value; return null if any operation is invalid. Never mutate document or operations, including when an earlier operation succeeded and a later one fails. Each operation has op ('add', 'replace', or 'remove'), path (JSON Pointer string), and for add/replace a required own value property. Empty path targets the whole document: add/replace replaces it, remove is invalid. Other paths must start with slash. Split by slash, decode ~1 to slash and ~0 to tilde; any other tilde escape is invalid. Every parent must already exist and be an object or array. Object traversal and replace/remove require own properties, not inherited ones; add may create/overwrite an own property. Reject any decoded segment equal to __proto__, prototype, or constructor. For arrays, indices must be canonical nonnegative decimal integers without leading zeros; add inserts at indices 0 through length inclusive, and final segment '-' appends. Replace/remove require index less than length. '-' is invalid for traversal or replace/remove. Removing array elements shifts later elements. Unknown ops, missing values, and invalid paths fail the entire patch. Do not mutate inputs. Return only JavaScript using module.exports = function(document, operations) { ... }; no Markdown or explanation.",
+      "cases": [
+        {
+          "label": "sequential array insertion and removal",
+          "args": [
+            { "a": [1, 2, 3] },
+            [
+              { "op": "add", "path": "/a/1", "value": 9 },
+              { "op": "remove", "path": "/a/2" },
+              { "op": "add", "path": "/a/-", "value": 4 }
+            ]
+          ],
+          "expected": { "a": [1, 9, 3, 4] }
+        },
+        {
+          "label": "pointer escape ordering",
+          "args": [
+            { "a/b": { "~x": 1 }, "~1": 2 },
+            [
+              { "op": "replace", "path": "/a~1b/~0x", "value": 7 },
+              { "op": "replace", "path": "/~01", "value": 8 }
+            ]
+          ],
+          "expected": { "a/b": { "~x": 7 }, "~1": 8 }
+        },
+        {
+          "label": "root replacement",
+          "args": [
+            { "old": true },
+            [
+              { "op": "replace", "path": "", "value": [1, 2] },
+              { "op": "add", "path": "/2", "value": 3 }
+            ]
+          ],
+          "expected": [1, 2, 3]
+        },
+        {
+          "label": "invalid late operation is atomic",
+          "args": [
+            { "a": [1] },
+            [
+              { "op": "add", "path": "/a/-", "value": 2 },
+              { "op": "replace", "path": "/missing", "value": 3 }
+            ]
+          ],
+          "expected": null
+        },
+        {
+          "label": "leading zero array index",
+          "args": [[10, 20], [{ "op": "replace", "path": "/01", "value": 30 }]],
+          "expected": null
+        },
+        {
+          "label": "forbidden prototype segment",
+          "args": [
+            {},
+            [
+              {
+                "op": "add",
+                "path": "/__proto__",
+                "value": { "polluted": true }
+              }
+            ]
+          ],
+          "expected": null
+        },
+        {
+          "label": "missing parent is not created",
+          "args": [{}, [{ "op": "add", "path": "/a/b", "value": 1 }]],
+          "expected": null
+        },
+        {
+          "label": "invalid pointer escape",
+          "args": [{ "a~2b": 1 }, [{ "op": "remove", "path": "/a~2b" }]],
+          "expected": null
+        },
+        {
+          "label": "empty object key",
+          "args": [{ "": 1 }, [{ "op": "replace", "path": "/", "value": 2 }]],
+          "expected": { "": 2 }
+        },
+        {
+          "label": "missing replacement value",
+          "args": [{ "a": 1 }, [{ "op": "replace", "path": "/a" }]],
+          "expected": null
+        },
+        {
+          "label": "inherited property is absent",
+          "args": [{}, [{ "op": "replace", "path": "/toString", "value": 1 }]],
+          "expected": null
+        },
+        {
+          "label": "root removal is invalid",
+          "args": [[1], [{ "op": "remove", "path": "" }]],
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "exact-money-sum",
+      "nonMutating": true,
+      "prompt": "Implement sumMoney(values), where values is an array of decimal strings. A valid string matches -?[0-9]+(\\.[0-9]+)? exactly: no plus sign, whitespace, exponent or missing digits. Each string has at most 50 digits total. Return null if any string is invalid. Sum all values exactly, with arbitrary decimal precision, and only then round the total to two decimal places using round-half-away-from-zero. Return a fixed two-decimal string, with no leading zeros except the zero before a decimal point. Zero must be '0.00', never '-0.00'. Empty array returns '0.00'. Do not use binary floating point for monetary arithmetic or mutate inputs. Return only JavaScript using module.exports = function(values) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "label": "empty sum", "args": [[]], "expected": "0.00" },
+        {
+          "label": "round once after summation",
+          "args": [["0.005", "0.005"]],
+          "expected": "0.01"
+        },
+        {
+          "label": "negative half cent",
+          "args": [["-0.005"]],
+          "expected": "-0.01"
+        },
+        {
+          "label": "beyond safe integer precision",
+          "args": [["9007199254740993.01"]],
+          "expected": "9007199254740993.01"
+        },
+        {
+          "label": "cancellation and normalized zero",
+          "args": [["-0002.5000", "2.5", "-0.000"]],
+          "expected": "0.00"
+        },
+        {
+          "label": "fraction carry",
+          "args": [["0.999", "0.001"]],
+          "expected": "1.00"
+        },
+        {
+          "label": "small negative rounds to positive zero",
+          "args": [["-0.0049"]],
+          "expected": "0.00"
+        },
+        {
+          "label": "mixed precision and signs",
+          "args": [["10.0001", "-3.9999", "0.0048"]],
+          "expected": "6.01"
+        },
+        {
+          "label": "exponent syntax rejected",
+          "args": [["1e3"]],
+          "expected": null
+        },
+        {
+          "label": "leading plus rejected",
+          "args": [["+1.00"]],
+          "expected": null
+        },
+        {
+          "label": "trailing whitespace rejected",
+          "args": [["1.00 "]],
+          "expected": null
+        },
+        {
+          "label": "missing fractional digits rejected",
+          "args": [["1."]],
+          "expected": null
+        },
+        {
+          "label": "terminal newline rejected",
+          "args": [["1.00\n"]],
+          "expected": null
+        },
+        {
+          "label": "decimal digit bound",
+          "args": [["111111111111111111111111111111111111111111111111111"]],
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "weighted-lru",
+      "nonMutating": true,
+      "prompt": "Implement runLRU(spec), where spec has a nonnegative integer capacity and operations array. Keys are strings; values are JSON; weights are positive integers. Operations are ['put',key,value,weight], ['get',key], ['peek',key], or ['resize',capacity]. Return {reads, entries}: reads contains the result of each get/peek, using null for a miss; entries is the final cache ordered most-recently-used first, each entry [key,value,weight]. Capacity limits total weight, not count. Successful get promotes an entry; peek never changes order. Put first removes any existing entry of the same key; if the new weight exceeds current capacity discard the new entry without evicting other keys. Otherwise insert it as most-recent, then evict least-recent entries until within capacity. Resize changes capacity and immediately evicts least-recent entries as necessary. Empty cache and capacity zero are valid. Input shapes follow this specification. Do not mutate spec or nested values. Return only JavaScript using module.exports = function(spec) { ... }; no Markdown or explanation.",
+      "cases": [
+        {
+          "label": "empty cache",
+          "args": [{ "capacity": 3, "operations": [] }],
+          "expected": { "reads": [], "entries": [] }
+        },
+        {
+          "label": "weight capacity and get promotion",
+          "args": [
+            {
+              "capacity": 3,
+              "operations": [
+                ["put", "a", 1, 1],
+                ["put", "b", 2, 2],
+                ["get", "a"],
+                ["put", "c", 3, 2],
+                ["get", "b"]
+              ]
+            }
+          ],
+          "expected": {
+            "reads": [1, null],
+            "entries": [
+              ["c", 3, 2],
+              ["a", 1, 1]
+            ]
+          }
+        },
+        {
+          "label": "peek does not promote",
+          "args": [
+            {
+              "capacity": 2,
+              "operations": [
+                ["put", "a", 1, 1],
+                ["put", "b", 2, 1],
+                ["peek", "a"],
+                ["put", "c", 3, 1]
+              ]
+            }
+          ],
+          "expected": {
+            "reads": [1],
+            "entries": [
+              ["c", 3, 1],
+              ["b", 2, 1]
+            ]
+          }
+        },
+        {
+          "label": "oversized replacement removes old key only",
+          "args": [
+            {
+              "capacity": 3,
+              "operations": [
+                ["put", "a", 1, 1],
+                ["put", "b", 2, 1],
+                ["put", "a", 9, 4],
+                ["get", "a"]
+              ]
+            }
+          ],
+          "expected": { "reads": [null], "entries": [["b", 2, 1]] }
+        },
+        {
+          "label": "resize evicts immediately",
+          "args": [
+            {
+              "capacity": 5,
+              "operations": [
+                ["put", "a", 1, 2],
+                ["put", "b", 2, 2],
+                ["put", "c", 3, 1],
+                ["resize", 2]
+              ]
+            }
+          ],
+          "expected": { "reads": [], "entries": [["c", 3, 1]] }
+        },
+        {
+          "label": "zero capacity then growth",
+          "args": [
+            {
+              "capacity": 0,
+              "operations": [
+                ["put", "a", 1, 1],
+                ["get", "a"],
+                ["resize", 1],
+                ["put", "b", false, 1],
+                ["get", "b"]
+              ]
+            }
+          ],
+          "expected": { "reads": [null, false], "entries": [["b", false, 1]] }
+        },
+        {
+          "label": "prototype-like keys are ordinary keys",
+          "args": [
+            {
+              "capacity": 2,
+              "operations": [
+                ["put", "__proto__", { "x": 1 }, 1],
+                ["put", "toString", 0, 1],
+                ["get", "__proto__"]
+              ]
+            }
+          ],
+          "expected": {
+            "reads": [{ "x": 1 }],
+            "entries": [
+              ["__proto__", { "x": 1 }, 1],
+              ["toString", 0, 1]
+            ]
+          }
+        },
+        {
+          "label": "replacement updates weight and recency",
+          "args": [
+            {
+              "capacity": 3,
+              "operations": [
+                ["put", "a", 1, 1],
+                ["put", "b", 2, 1],
+                ["put", "a", 9, 3],
+                ["peek", "b"]
+              ]
+            }
+          ],
+          "expected": { "reads": [null], "entries": [["a", 9, 3]] }
+        }
+      ]
+    },
+    {
+      "id": "timezone-interval-union",
+      "nonMutating": true,
+      "prompt": "Implement unionIntervals(intervals), an array of [start,end] timestamp pairs. Accept timestamps only in exact YYYY-MM-DDTHH:mm:ssZ or YYYY-MM-DDTHH:mm:ss+HH:MM / -HH:MM form, with input years 2000 through 2099, valid Gregorian calendar dates, hours 00-23, minutes/seconds 00-59, and numeric offsets at most 14:00 (if offset hours is 14, minutes must be 00). Reject normalized invalid dates, fractional seconds, bare dates, and any other spelling. Convert timestamps to instants using their offsets. If any timestamp is invalid or any start instant exceeds its end instant, return null. Validate every pair, then ignore zero-duration intervals. Return the union sorted by UTC start as pairs of Date.toISOString()-format UTC strings including .000Z. Merge intervals that overlap or touch. Empty input returns []. Do not mutate inputs. Return only JavaScript using module.exports = function(intervals) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "label": "empty intervals", "args": [[]], "expected": [] },
+        {
+          "label": "offset overlap",
+          "args": [
+            [
+              ["2024-01-01T10:00:00+02:00", "2024-01-01T11:00:00+02:00"],
+              ["2024-01-01T08:30:00Z", "2024-01-01T10:00:00Z"]
+            ]
+          ],
+          "expected": [["2024-01-01T08:00:00.000Z", "2024-01-01T10:00:00.000Z"]]
+        },
+        {
+          "label": "offset crosses UTC year",
+          "args": [
+            [["2024-01-01T00:15:00+01:00", "2024-01-01T01:00:00+01:00"]]
+          ],
+          "expected": [["2023-12-31T23:15:00.000Z", "2024-01-01T00:00:00.000Z"]]
+        },
+        {
+          "label": "sort merge touching and drop zero duration",
+          "args": [
+            [
+              ["2024-01-01T03:00:00Z", "2024-01-01T04:00:00Z"],
+              ["2024-01-01T01:00:00Z", "2024-01-01T02:00:00Z"],
+              ["2024-01-01T02:00:00Z", "2024-01-01T03:00:00Z"],
+              ["2024-01-01T08:00:00Z", "2024-01-01T08:00:00Z"]
+            ]
+          ],
+          "expected": [["2024-01-01T01:00:00.000Z", "2024-01-01T04:00:00.000Z"]]
+        },
+        {
+          "label": "valid leap day",
+          "args": [[["2024-02-29T23:00:00Z", "2024-03-01T00:00:00Z"]]],
+          "expected": [["2024-02-29T23:00:00.000Z", "2024-03-01T00:00:00.000Z"]]
+        },
+        {
+          "label": "non-leap day must not normalize",
+          "args": [[["2023-02-29T00:00:00Z", "2023-03-01T00:00:00Z"]]],
+          "expected": null
+        },
+        {
+          "label": "offset beyond fourteen hours",
+          "args": [[["2024-01-01T00:00:00+14:01", "2024-01-02T00:00:00Z"]]],
+          "expected": null
+        },
+        {
+          "label": "fractional seconds are not accepted",
+          "args": [[["2024-01-01T00:00:00.000Z", "2024-01-02T00:00:00Z"]]],
+          "expected": null
+        },
+        {
+          "label": "end precedes start by instant",
+          "args": [[["2024-01-01T09:00:00-02:00", "2024-01-01T10:00:00Z"]]],
+          "expected": null
+        },
+        {
+          "label": "hour twenty-four rejected",
+          "args": [[["2024-01-01T24:00:00Z", "2024-01-03T00:00:00Z"]]],
+          "expected": null
+        }
+      ]
+    },
+    {
+      "id": "dependency-layers",
+      "nonMutating": true,
+      "prompt": "Implement dependencyLayers(tasks), an array of objects {id, deps}, with string id and array of string dependency IDs. Return null for duplicate task IDs, missing dependencies, or any cycle (including self-dependency). Otherwise return arrays of IDs in parallel execution layers. At each step take ALL tasks whose dependencies were completed in earlier layers, sort those IDs by JavaScript's default string sort (UTF-16 code units), emit them together, and only then mark that layer completed. Repeated IDs in a task's deps count as one dependency. Empty input returns []. IDs such as __proto__ and toString are ordinary strings. Preserve all input arrays and objects. Return only JavaScript using module.exports = function(tasks) { ... }; no Markdown or explanation.",
+      "cases": [
+        { "label": "empty graph", "args": [[]], "expected": [] },
+        {
+          "label": "whole ready layer before next",
+          "args": [
+            [
+              { "id": "d", "deps": ["b", "c"] },
+              { "id": "c", "deps": ["a"] },
+              { "id": "b", "deps": [] },
+              { "id": "a", "deps": [] }
+            ]
+          ],
+          "expected": [["a", "b"], ["c"], ["d"]]
+        },
+        {
+          "label": "duplicate dependency is one edge",
+          "args": [
+            [
+              { "id": "b", "deps": ["a", "a"] },
+              { "id": "a", "deps": [] }
+            ]
+          ],
+          "expected": [["a"], ["b"]]
+        },
+        {
+          "label": "disconnected cycle",
+          "args": [
+            [
+              { "id": "free", "deps": [] },
+              { "id": "a", "deps": ["b"] },
+              { "id": "b", "deps": ["a"] }
+            ]
+          ],
+          "expected": null
+        },
+        {
+          "label": "missing dependency",
+          "args": [[{ "id": "a", "deps": ["missing"] }]],
+          "expected": null
+        },
+        {
+          "label": "duplicate task ID",
+          "args": [
+            [
+              { "id": "a", "deps": [] },
+              { "id": "a", "deps": [] }
+            ]
+          ],
+          "expected": null
+        },
+        {
+          "label": "self cycle",
+          "args": [[{ "id": "a", "deps": ["a"] }]],
+          "expected": null
+        },
+        {
+          "label": "prototype-like IDs and lexical sort",
+          "args": [
+            [
+              { "id": "toString", "deps": ["__proto__"] },
+              { "id": "__proto__", "deps": [] },
+              { "id": "Z", "deps": [] },
+              { "id": "a", "deps": [] }
+            ]
+          ],
+          "expected": [["Z", "__proto__", "a"], ["toString"]]
+        }
+      ]
+    }
+  ]
+}
