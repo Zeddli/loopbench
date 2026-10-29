@@ -17,6 +17,8 @@ import { handleChatCompletion } from "./gateway";
 import { validateHarnessArtifact } from "./harnesses";
 import { revokeCampaignGatewayGrants } from "./gateway-tokens";
 import { appendCampaignEvent } from "./events";
+import { saveArtifact } from "./artifacts";
+import { createTokenRelayCycle } from "./token-relay-cycle";
 
 export const tokenHarnessId = "pi-1.4.0-tokenfactory";
 const manifestSchema = z.object({
@@ -103,20 +105,6 @@ const rowSchema = z.object({
   project_digest: z.string(),
 });
 type Row = z.infer<typeof rowSchema>;
-const requestSchema = z
-  .object({
-    id: z.uuid(),
-    body: z.string().max(393216),
-    headers: z
-      .object({
-        authorization: z.string(),
-        "content-type": z.literal("application/json"),
-        "x-loopbench-request-key": z.string(),
-      })
-      .strict(),
-  })
-  .strict();
-
 export function makeTokenSandboxContext(
   input: { lease: Lease },
   context: HostedContext,
@@ -292,55 +280,95 @@ export function makeTokenSandboxContext(
       if (!ready) throw Error("Inference relay did not become ready");
       remote.inferenceOrigin = "http://127.0.0.1:42661/api/inference/v1";
       let stopped = false;
-      const seen = new Set<string>();
       relayStops.set(id, () => {
         stopped = true;
+      });
+      let stage = "poll";
+      const cycle = createTokenRelayCycle({
+        assertFence() {
+          if (stopped) throw Error("Relay stopped");
+          assertLease(input.lease, context);
+        },
+        delay,
+        onRetry(stage, attempt) {
+          appendCampaignEvent(
+            {
+              ownerScope: r.owner_scope,
+              campaignId: r.campaign_id,
+              lease: input.lease,
+              type: "relay_io_retry",
+              payload: { attemptId: r.attempt_id, stage, attempt },
+            },
+            context,
+          );
+        },
+        async poll() {
+          stage = "poll";
+          const result = await remote.run(
+            'node -e \'const fs=require("node:fs"),d="/opt/loopbench/relay",out=[];for(const x of fs.readdirSync(d).filter(x=>/^[0-9a-f-]+\\.request\\.json$/.test(x)).slice(0,2)){try{out.push(JSON.parse(fs.readFileSync(d+"/"+x,"utf8")))}catch(e){if(e.code!=="ENOENT")throw e}}process.stdout.write(JSON.stringify(out));\'',
+          );
+          if (result.exitCode !== 0) throw Error("Relay polling failed");
+          return JSON.parse(result.stdout);
+        },
+        async infer(request) {
+          stage = "inference";
+          const response = await handleChatCompletion(
+            new Request(
+              `${context.config.gatewayOrigin.replace(/\/$/, "")}/api/inference/v1/chat/completions`,
+              {
+                method: "POST",
+                headers: request.headers,
+                body: request.body,
+              },
+            ),
+            context,
+          );
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (bytes.length > 4194304)
+            throw Error("Relay response exceeded limit");
+          return JSON.stringify({
+            status: response.status,
+            contentType: response.headers.get("content-type"),
+            body: bytes.toString("base64"),
+          });
+        },
+        async deliver(requestId, body) {
+          stage = "deliver";
+          await remote.writeFile(
+            `/opt/loopbench/relay/${requestId}.response.tmp`,
+            body,
+          );
+          const delivery = await remote.run(
+            `mv /opt/loopbench/relay/${requestId}.response.tmp /opt/loopbench/relay/${requestId}.response.json`,
+          );
+          if (delivery.exitCode !== 0) throw Error("Relay delivery failed");
+        },
       });
       const pump = async () => {
         while (!stopped) {
           try {
-            const result = await remote.run(
-              'node -e \'const fs=require("node:fs"),d="/opt/loopbench/relay";process.stdout.write(JSON.stringify(fs.readdirSync(d).filter(x=>/^[0-9a-f-]+\\.request\\.json$/.test(x)).slice(0,2).map(x=>JSON.parse(fs.readFileSync(d+"/"+x,"utf8")))));\'',
-            );
-            if (result.exitCode !== 0) throw Error("Relay polling failed");
-            const requests = z
-              .array(requestSchema)
-              .max(2)
-              .parse(JSON.parse(result.stdout));
-            for (const request of requests) {
-              if (seen.has(request.id)) continue;
-              seen.add(request.id);
-              assertLease(input.lease, context);
-              const response = await handleChatCompletion(
-                new Request(
-                  `${context.config.gatewayOrigin.replace(/\/$/, "")}/api/inference/v1/chat/completions`,
-                  {
-                    method: "POST",
-                    headers: request.headers,
-                    body: request.body,
-                  },
-                ),
+            await cycle();
+          } catch {
+            if (stopped) break;
+            stopped = true; /* No ambiguous inference POST is replayed. */
+            try {
+              saveArtifact(
+                {
+                  ownerScope: r.owner_scope,
+                  campaignId: r.campaign_id,
+                  kind: "platform-diagnostic",
+                  visibility: "internal_only",
+                  contents: JSON.stringify({
+                    source: "token_relay",
+                    attemptId: r.attempt_id,
+                    stage,
+                  }),
+                },
                 context,
               );
-              const bytes = Buffer.from(await response.arrayBuffer());
-              if (bytes.length > 4194304)
-                throw Error("Relay response exceeded limit");
-              const body = JSON.stringify({
-                status: response.status,
-                contentType: response.headers.get("content-type"),
-                body: bytes.toString("base64"),
-              });
-              await remote.writeFile(
-                `/opt/loopbench/relay/${request.id}.response.tmp`,
-                body,
-              );
-              const delivery = await remote.run(
-                `mv /opt/loopbench/relay/${request.id}.response.tmp /opt/loopbench/relay/${request.id}.response.json`,
-              );
-              if (delivery.exitCode !== 0) throw Error("Relay delivery failed");
+            } catch {
+              /* Diagnostics must not outlive the worker database. */
             }
-          } catch {
-            stopped = true; /* Pi times out; no provider POST is replayed. */
           }
           if (!stopped) await delay(750);
         }
@@ -532,17 +560,28 @@ export async function reapTokenSandboxes(context: HostedContext) {
     )
     .all(now(context))
     .map((value) => rowSchema.parse(value));
+  function reconcileInterruptedAttempt(r: Row) {
+    context.db
+      .prepare(
+        "UPDATE hosted_attempts SET status='infrastructure_failed',updated_at=? WHERE id=? AND owner_scope=? AND campaign_id=? AND status='running' AND NOT EXISTS(SELECT 1 FROM token_sandbox_intents t WHERE t.attempt_id=hosted_attempts.id AND t.owner_scope=hosted_attempts.owner_scope AND t.campaign_id=hosted_attempts.campaign_id AND t.status!='terminated') AND NOT EXISTS(SELECT 1 FROM hosted_sandbox_intents s WHERE s.attempt_id=hosted_attempts.id AND s.owner_scope=hosted_attempts.owner_scope AND s.campaign_id=hosted_attempts.campaign_id AND s.status!='terminated')",
+      )
+      .run(now(context), r.attempt_id, r.owner_scope, r.campaign_id);
+  }
   for (const r of rows) {
     result.checked++;
     try {
       if (r.project_digest !== digest) throw Error("Project changed");
       if (!r.operation_id) {
         if (r.status === "prepared") {
-          const changed = context.db
-            .prepare(
-              "UPDATE token_sandbox_intents SET status='terminated',updated_at=? WHERE id=? AND status='prepared' AND operation_id IS NULL",
-            )
-            .run(now(context), r.id).changes;
+          const changed = withHostedTransaction(context.db, () => {
+            const changed = context.db
+              .prepare(
+                "UPDATE token_sandbox_intents SET status='terminated',updated_at=? WHERE id=? AND status='prepared' AND operation_id IS NULL",
+              )
+              .run(now(context), r.id).changes;
+            if (changed) reconcileInterruptedAttempt(r);
+            return changed;
+          });
           if (changed) {
             result.terminated++;
             continue;
@@ -601,11 +640,7 @@ export async function reapTokenSandboxes(context: HostedContext) {
             now(context),
             r.id,
           );
-        context.db
-          .prepare(
-            "UPDATE hosted_attempts SET status='infrastructure_failed',updated_at=? WHERE id=? AND status='running'",
-          )
-          .run(now(context), r.attempt_id);
+        reconcileInterruptedAttempt(r);
         revokeCampaignGatewayGrants(r.campaign_id, context);
         appendCampaignEvent(
           {
