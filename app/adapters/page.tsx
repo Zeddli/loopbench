@@ -2,10 +2,17 @@ import Link from "next/link";
 import { listAdapters } from "@/core/store";
 import { CopyCommand } from "@/components/CopyCommand";
 import { isHostedMode } from "@/hosted/http";
+import { HostedHarnessCatalog } from "@/components/hosted/HostedHarnessCatalog";
 
 export const dynamic = "force-dynamic";
 export default async function Adapters() {
-  const adapters = isHostedMode() ? [] : await listAdapters();
+  if (isHostedMode())
+    return (
+      <main className="container">
+        <HostedHarnessCatalog />
+      </main>
+    );
+  const adapters = await listAdapters();
   return (
     <main className="container">
       <nav className="crumbs">
