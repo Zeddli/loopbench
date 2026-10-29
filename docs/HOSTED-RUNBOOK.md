@@ -1,5 +1,7 @@
 # Hosted pilot runbook
 
+For the selected Oracle Always Free host, start with the [Oracle account, VM and migration checklist](ORACLE-DEPLOYMENT.md). The cloud deployment is not complete until its ARM build, persistent state and independent worker progress are verified.
+
 ## Token Factory provider
 
 The project now has verified sandbox permissions. Configure `LOOPBENCH_EXECUTION_PROVIDER=tokenfactory`, `NEBIUS_API_KEY`, `NEBIUS_PROJECT_ID` and, for permanent hosting, `LOOPBENCH_TOKEN_RUNNER_MANIFEST` in the private worker/reaper environment. The web process needs the approved manifest for readiness and does not need the controller key. Browser inference keys remain encrypted, owner-scoped BYOK connections.
