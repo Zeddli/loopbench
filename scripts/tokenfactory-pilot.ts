@@ -17,12 +17,33 @@ import {
 } from "../hosted/tokenfactory-sandboxes";
 import { publishCampaignSnapshot } from "../hosted/publication";
 import { publicationProgress } from "../hosted/publication-schema";
+import { loadBenchmark } from "../core/benchmarks";
+import { z } from "zod";
 
+const validation = process.argv.includes("--validation");
+const roundsIndex = process.argv.indexOf("--rounds");
+const maxRounds =
+  roundsIndex === -1
+    ? null
+    : z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .parse(process.argv[roundsIndex + 1]);
 const context = getHostedContext(),
-  identity = await tokenOperatorIdentity(context),
+  identity = await tokenOperatorIdentity(
+    context,
+    validation ? "validation" : "pilot",
+  ),
   ownerScope = identity.session.ownerScope;
 await loadTokenHarness();
-const file = ".loopbench/hosted/token-pilot.json";
+const file = validation
+  ? ".loopbench/hosted/token-validation-pilot.json"
+  : ".loopbench/hosted/token-pilot.json";
+const publishedFile = validation
+  ? ".loopbench/hosted/token-validation-published-live.json"
+  : ".loopbench/hosted/token-published-live.json";
 let campaign;
 if (process.argv.includes("--resume")) {
   const saved = JSON.parse(await readFile(file, "utf8"));
@@ -52,7 +73,7 @@ if (process.argv.includes("--resume")) {
       modelId: model.id,
       benchmarkId: "coding-adversarial-v1",
       harnessId: tokenHarnessId,
-      inferenceAllowanceUsdMicros: 500000n,
+      inferenceAllowanceUsdMicros: validation ? 400000n : 500000n,
       acceptedPricingSnapshotId: model.pricingSnapshotId,
       idempotencyKey: randomUUID(),
     },
@@ -87,11 +108,33 @@ process.stdout.write(
 try {
   while (true) {
     await workerTick(worker, context, { jobId: String(job.id) });
-    const current = getCampaign(
-      { ownerScope, campaignId: campaign.id },
-      context,
-    );
+    let current = getCampaign({ ownerScope, campaignId: campaign.id }, context);
     if (!current) throw Error("Missing campaign");
+    if (
+      maxRounds !== null &&
+      current.status === "running" &&
+      current.checkpoint.phase === "propose" &&
+      Number(current.checkpoint.round ?? 0) >= maxRounds
+    ) {
+      current = controlCampaign(
+        {
+          ownerScope,
+          campaignId: campaign.id,
+          action: "pause",
+          expectedRevision: current.revision,
+          operationId: randomUUID(),
+        },
+        context,
+      );
+      await workerTick(worker, context, { jobId: String(job.id) });
+      current = getCampaign({ ownerScope, campaignId: campaign.id }, context);
+      if (!current) throw Error("Missing campaign after checkpoint pause");
+    }
+    const benchmark = await loadBenchmark(
+      typeof current.checkpoint.benchmarkPath === "string"
+        ? current.checkpoint.benchmarkPath
+        : current.benchmarkId,
+    );
     const progress = publicationProgress(
       current,
       Number(
@@ -101,6 +144,7 @@ try {
           )
           .get(campaign.id, Number(current.checkpoint.round ?? 0))?.n ?? 0,
       ),
+      benchmark.tasks.length,
     );
     const nodes = listVersionNodes(
         { ownerScope, campaignId: campaign.id },
@@ -136,7 +180,7 @@ try {
         context,
       );
       await writeFile(
-        ".loopbench/hosted/token-published-live.json",
+        publishedFile,
         JSON.stringify({
           snapshotId: snapshot.id,
           url: `/tree/${snapshot.id}`,

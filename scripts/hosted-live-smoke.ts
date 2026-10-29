@@ -17,6 +17,7 @@ import { runHostedPreflight } from "./hosted-preflight";
 import { getBudgetSummary } from "../hosted/budget";
 import { publishCampaignSnapshot } from "../hosted/publication";
 import { publicationProgress } from "../hosted/publication-schema";
+import { loadBenchmark } from "../core/benchmarks";
 
 const report = await runHostedPreflight();
 if (!report.ready)
@@ -171,6 +172,11 @@ try {
       }) + "\n",
     );
     const completedCount = nodes.filter((node) => node.completedAt).length;
+    const benchmark = await loadBenchmark(
+      typeof current.checkpoint.benchmarkPath === "string"
+        ? current.checkpoint.benchmarkPath
+        : current.benchmarkId,
+    );
     const progress = publicationProgress(
       current,
       Number(
@@ -180,6 +186,7 @@ try {
           )
           .get(campaign.id, Number(current.checkpoint.round ?? 0))?.n ?? 0,
       ),
+      benchmark.tasks.length,
     );
     const digest = createHash("sha256")
       .update(

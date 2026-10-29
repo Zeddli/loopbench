@@ -7,12 +7,14 @@ import type { HostedContext } from "../hosted/schema";
 
 export async function tokenOperatorIdentity(
   context: HostedContext,
-  purpose: "pilot" | "probe" = "pilot",
+  purpose: "pilot" | "probe" | "validation" = "pilot",
 ) {
   const file =
-    purpose === "probe"
-      ? ".loopbench/hosted/token-probe-session.json"
-      : ".loopbench/hosted/token-verification-session.json";
+    purpose === "validation"
+      ? ".loopbench/hosted/token-validation-session.json"
+      : purpose === "probe"
+        ? ".loopbench/hosted/token-probe-session.json"
+        : ".loopbench/hosted/token-verification-session.json";
   try {
     const saved = z
       .object({
