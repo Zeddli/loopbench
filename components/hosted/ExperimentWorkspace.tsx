@@ -14,6 +14,7 @@ import {
 import { HostedCampaignControls } from "./HostedCampaignControls";
 import { AttemptEvidence } from "./AttemptEvidence";
 import { InferenceAllowanceReview } from "./InferenceAllowanceReview";
+import { ProposalEvidence } from "./ProposalEvidence";
 
 const eventsSchema = z.object({
   nextCursor: z.string(),
@@ -173,21 +174,7 @@ export function ExperimentWorkspace({ id }: { id: string }) {
         {["paused", "waiting"].includes(campaign.status) && (
           <InferenceAllowanceReview projection={projection} refresh={refresh} />
         )}
-        {projection.proposals.filter((proposal) => !proposal.nodeId).length >
-          0 && (
-          <>
-            <h3>Saved hypotheses awaiting execution</h3>
-            <ul>
-              {projection.proposals
-                .filter((proposal) => !proposal.nodeId)
-                .map((proposal, index) => (
-                  <li key={`${proposal.round}-${index}`}>
-                    Round {proposal.round} · {proposal.hypothesis}
-                  </li>
-                ))}
-            </ul>
-          </>
-        )}
+        <ProposalEvidence proposals={projection.proposals} />
       </details>
       {nodes.length ? (
         <>

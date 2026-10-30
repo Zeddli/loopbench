@@ -5,6 +5,7 @@ import { publishedSnapshotSchema } from "@/hosted/publication-schema";
 import { HarnessView } from "./HarnessView";
 import { LearningRecord } from "../LearningRecord";
 import { PublishedProgress } from "./PublishedProgress";
+import { PublishedTaskResults } from "./PublishedTaskResults";
 import type { PublishedSnapshot } from "@/hosted/publication";
 export function PublishedWorkspace({
   snapshot: original,
@@ -46,7 +47,9 @@ export function PublishedWorkspace({
   const [selected, setSelected] = useState(
     snapshot.tree.nodes.at(-1)?.id ?? "",
   );
-  const node = snapshot.tree.nodes.find((entry) => entry.id === selected);
+  const node =
+    snapshot.tree.nodes.find((entry) => entry.id === selected) ??
+    snapshot.tree.nodes.at(-1);
   return (
     <>
       <div className="tree-heading">
@@ -116,7 +119,7 @@ export function PublishedWorkspace({
         <>
           <HarnessView
             nodes={snapshot.tree.nodes}
-            selected={selected}
+            selected={node?.id ?? ""}
             onSelect={setSelected}
             statusText={
               follow
@@ -138,6 +141,7 @@ export function PublishedWorkspace({
           No executed harness versions in this snapshot.
         </div>
       )}
+      <PublishedTaskResults node={node} />
     </>
   );
 }

@@ -100,6 +100,9 @@ export const projectionSchema = z.object({
         hypothesis: z.string(),
         nodeId: z.string().nullable(),
         round: z.number(),
+        outcome: z.literal("quarantined").optional(),
+        failurePhase: z.enum(["parent", "candidate"]).optional(),
+        error: z.string().optional(),
       }),
     )
     .default([]),
