@@ -45,7 +45,9 @@ export function LearningRecord({
             ? "What this branch learned"
             : "Evidence for the next experiment"}
         </h2>
-        {learning && <span className="tag">Round {learning.round}</span>}
+        {learning && (
+          <span className="tag">Selected version · Round {learning.round}</span>
+        )}
       </div>
       <ol className="learning-steps">
         <li>

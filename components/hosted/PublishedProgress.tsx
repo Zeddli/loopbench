@@ -1,5 +1,38 @@
 import type { PublishedSnapshot } from "@/hosted/publication";
 
+export function graphActivityText(
+  execution: NonNullable<PublishedSnapshot["tree"]["execution"]>,
+  following: boolean,
+) {
+  const phase =
+    execution.phase === "parent"
+      ? "Parent verification"
+      : execution.phase === "candidate"
+        ? "Candidate evaluation"
+        : execution.phase === "propose"
+          ? "Preparing competing changes"
+          : execution.phase === "baseline"
+            ? "Baseline evaluation"
+            : execution.phase === "challenge"
+              ? "Challenge evaluation"
+              : "Model check";
+  return [
+    `${following ? "Round" : "Snapshot round"} ${execution.round ?? 0}`,
+    execution.status.charAt(0).toUpperCase() + execution.status.slice(1),
+    phase,
+    execution.taskTotal
+      ? `${execution.tasksCompleted ?? 0}/${execution.taskTotal} tasks`
+      : null,
+    execution.proposalCount &&
+    ["parent", "candidate"].includes(execution.phase ?? "")
+      ? `Sibling ${Math.min((execution.proposalIndex ?? 0) + 1, execution.proposalCount)}/${execution.proposalCount}`
+      : null,
+    execution.waitReason?.replaceAll("_", " "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function PublishedProgress({
   execution,
   totalTasks,

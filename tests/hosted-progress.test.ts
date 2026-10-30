@@ -2,9 +2,57 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PublishedProgress } from "../components/hosted/PublishedProgress";
+import {
+  PublishedProgress,
+  graphActivityText,
+} from "../components/hosted/PublishedProgress";
+import { HarnessView } from "../components/hosted/HarnessView";
 import { PublishedWorkspace } from "../components/hosted/PublishedWorkspace";
 import { nodeRecordSchema } from "../core/types";
+
+test("round four remains visible inside an unchanged graph during a parent rerun", () => {
+  const text = graphActivityText(
+    {
+      status: "running",
+      waitReason: null,
+      observedAt: "2026-10-30T11:35:00Z",
+      phase: "parent",
+      round: 4,
+      tasksCompleted: 3,
+      taskTotal: 6,
+      proposalIndex: 0,
+      proposalCount: 2,
+    },
+    true,
+  );
+  const html = renderToStaticMarkup(
+    createElement(HarnessView, {
+      nodes: [],
+      selected: "",
+      onSelect: () => {},
+      statusText: "Following published checkpoints",
+      activityText: text,
+    }),
+  );
+  assert.match(html, /aria-label="Current graph activity"/);
+  assert.match(html, /Round 4/);
+  assert.match(html, /Parent verification/);
+  assert.match(html, /3\/6 tasks/);
+  assert.match(html, /Sibling 1\/2/);
+  const waiting = graphActivityText(
+    {
+      status: "waiting",
+      waitReason: "inference_budget",
+      observedAt: "2026-10-30T11:35:00Z",
+      phase: "parent",
+      round: 4,
+    },
+    false,
+  );
+  assert.match(waiting, /Snapshot round 4/);
+  assert.match(waiting, /Waiting/);
+  assert.match(waiting, /inference budget/);
+});
 
 test("parent reruns expose verified tasks and the current sibling before a graph node exists", () => {
   const html = renderToStaticMarkup(

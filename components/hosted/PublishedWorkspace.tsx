@@ -4,7 +4,7 @@ import { api } from "./contracts";
 import { publishedSnapshotSchema } from "@/hosted/publication-schema";
 import { HarnessView } from "./HarnessView";
 import { LearningRecord } from "../LearningRecord";
-import { PublishedProgress } from "./PublishedProgress";
+import { PublishedProgress, graphActivityText } from "./PublishedProgress";
 import { PublishedTaskResults } from "./PublishedTaskResults";
 import type { PublishedSnapshot } from "@/hosted/publication";
 export function PublishedWorkspace({
@@ -20,7 +20,7 @@ export function PublishedWorkspace({
       timer: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
       try {
-        if (follow && !document.hidden) {
+        if (follow) {
           const next = await api(
             `/api/hosted/catalog?latestForSnapshot=${encodeURIComponent(original.id)}`,
             publishedSnapshotSchema,
@@ -118,6 +118,11 @@ export function PublishedWorkspace({
       {snapshot.tree.nodes.length ? (
         <>
           <HarnessView
+            activityText={
+              snapshot.tree.execution
+                ? graphActivityText(snapshot.tree.execution, follow)
+                : undefined
+            }
             nodes={snapshot.tree.nodes}
             selected={node?.id ?? ""}
             onSelect={setSelected}

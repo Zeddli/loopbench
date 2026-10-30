@@ -17,6 +17,7 @@ export function HarnessView({
   onSelect,
   headId,
   statusText,
+  activityText,
   recordHref = "#evidence",
 }: {
   nodes: NodeRecord[];
@@ -24,6 +25,7 @@ export function HarnessView({
   onSelect: (id: string) => void;
   headId?: string;
   statusText: string;
+  activityText?: string;
   recordHref?: string;
 }) {
   const [view, setView] = useState<"tree" | "stats">("tree");
@@ -54,6 +56,7 @@ export function HarnessView({
         <figure className="stage">
           <div className="graph-panel">
             <LineageGraph
+              activityText={activityText}
               nodes={nodes}
               selected={selected}
               onSelect={onSelect}

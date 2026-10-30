@@ -85,11 +85,13 @@ export function LineageGraph({
   selected,
   onSelect,
   headId,
+  activityText,
 }: {
   nodes: NodeRecord[];
   selected: string;
   onSelect: (id: string) => void;
   headId?: string;
+  activityText?: string;
 }) {
   const layout = useMemo(() => layoutLineage(nodes), [nodes]);
   const [zoom, setZoom] = useState(1);
@@ -248,6 +250,25 @@ export function LineageGraph({
         tabIndex={0}
         aria-label="Horizontal lineage graph. Scroll to explore all evaluations."
       >
+        {activityText && (
+          <div
+            role="status"
+            aria-label="Current graph activity"
+            style={{
+              position: "sticky",
+              top: 0,
+              left: 0,
+              zIndex: 3,
+              padding: "10px 16px",
+              background: "var(--pass-soft)",
+              color: "var(--ink)",
+              borderBottom: "1px solid var(--rule)",
+              fontFamily: "var(--mono)",
+            }}
+          >
+            {activityText}
+          </div>
+        )}
         <svg
           width={layout.width * zoom}
           height={layout.height * zoom}
@@ -272,7 +293,7 @@ export function LineageGraph({
                   rx={5}
                 />
                 <text x={start + 12} y={86}>
-                  LEVEL {group.level} · {group.totalTasks} TESTS ·{" "}
+                  BENCHMARK LEVEL {group.level} · {group.totalTasks} TESTS ·{" "}
                   {group.hash.slice(0, 8)}
                 </text>
               </g>
