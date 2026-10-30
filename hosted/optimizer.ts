@@ -33,6 +33,14 @@ export const hostedProposalSchema = z
   })
   .strict();
 export type HostedProposal = z.infer<typeof hostedProposalSchema>;
+export function optimizerBehavioralContract(prompt: string): string {
+  // The agent's response-format instruction is not an optimizer instruction.
+  // Strip only the known suffix; retain every behavioral requirement verbatim.
+  return prompt.replace(
+    /\s*Return only JavaScript using module\.exports = function\([^)]*\) \{ \.\.\. \}; no Markdown or explanation\.$/,
+    "",
+  );
+}
 export function optimizerResponseContent(raw: unknown): string {
   const result = z
     .object({
@@ -134,7 +142,7 @@ async function scopedCompletion(
       modelId: input.campaign.modelId,
       role: input.role,
       maxCalls: 1,
-      durationMs: 120000,
+      durationMs: input.role === "optimizer" ? 210000 : 120000,
       lease: input.lease,
     },
     context,
@@ -518,7 +526,7 @@ export async function proposeHarnessBranches(
               parentId: input.parent.id,
               publicContracts: benchmark.tasks.map((task) => ({
                 taskId: task.id,
-                prompt: task.prompt,
+                prompt: optimizerBehavioralContract(task.prompt),
                 nonMutating: task.nonMutating,
               })),
               parentEvaluation: {

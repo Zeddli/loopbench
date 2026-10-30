@@ -6,6 +6,7 @@ import {
   validateProposalSet,
   bindProposalParent,
   optimizerResponseContent,
+  optimizerBehavioralContract,
 } from "../hosted/optimizer";
 import { HostedError } from "../hosted/schema";
 
@@ -68,6 +69,19 @@ const input = {
   nodes: [parent, { ...parent, id: "other" }],
   harness,
 };
+test("optimizer contract evidence excludes the coding agent's output instruction without changing behavior", () => {
+  const behavior =
+    "Implement sumMoney(values). Empty input returns '0.00'. Preserve inputs.";
+  const task = `${behavior} Return only JavaScript using module.exports = function(values) { ... }; no Markdown or explanation.`;
+  assert.equal(optimizerBehavioralContract(task), behavior);
+  assert.equal(optimizerBehavioralContract(behavior), behavior);
+  assert.equal(
+    optimizerBehavioralContract(
+      "A string containing module.exports is valid input.",
+    ),
+    "A string containing module.exports is valid input.",
+  );
+});
 test("an optimizer that exhausts its output without an answer is a proposal failure, not a runtime outage", () => {
   assert.throws(
     () =>

@@ -339,7 +339,10 @@ export async function handleChatCompletion(
     }
     let upstream: Response;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 110000);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      grant.role === "optimizer" ? 180000 : 110000,
+    );
     try {
       upstream = await transport(
         `${context.config.nebiusOrigin}/v1/chat/completions`,
