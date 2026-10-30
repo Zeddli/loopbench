@@ -1,5 +1,66 @@
 # LoopBench
 
+## Nebius and NVIDIA architecture
+
+NVIDIA Nemotron powers both the Pi coding agent and the optimizer that proposes changes to its harness. Nebius Token Factory provides model inference and isolated Sandbox execution. The diagram shows the current localhost demo: the browser, API, worker and evidence store run on the developer's machine; inference and task execution run in Nebius.
+
+```mermaid
+flowchart TB
+    User["User selects Nemotron model, Pi harness and benchmark"] --> UI["Browser: live evolution tree"]
+
+    subgraph Local["LoopBench controller · currently localhost"]
+        API["Next.js API · owned experiments and model catalog"]
+        Vault["Encrypted user inference key"]
+        Worker["Durable worker · checkpoints and 2–6 siblings per round"]
+        Optimizer["Optimizer · diagnose mistakes and propose harness changes"]
+        Gateway["Scoped inference gateway · authorization, allowances and token usage"]
+        Relay["Host relay · sandbox control API"]
+        Store[("SQLite and private artifacts · versions, lessons and verdicts")]
+        Publish["Sanitized publication · live progress and measured branches"]
+        Reaper["Reaper · cleanup and uncertain operation recovery"]
+    end
+
+    subgraph Nebius["Nebius cloud"]
+        Models["Token Factory inference · NVIDIA Nemotron"]
+        subgraph Sandboxes["Token Factory Sandboxes · pinned Pi 1.4.0 / Node 24 image"]
+            Pi["Clean agent operations · Pi with versioned harness · guest network disabled"]
+            Verifier["Separate fresh verifier operations · unchanged grader and private tests · no network"]
+        end
+    end
+
+    UI --> API
+    API -->|"Discover available models"| Models
+    API --> Vault
+    API -->|"Queue experiment"| Store
+    Store -->|"Claim work and resume checkpoint"| Worker
+    Worker --> Optimizer
+    Optimizer -->|"Mistake evidence and owned generated code excerpts"| Gateway
+    Gateway -->|"Resolve credential outside guests"| Vault
+    Gateway <-->|"Model requests, responses and usage"| Models
+    Worker -->|"Run candidate and fresh parent with identical settings"| Pi
+    Pi <-->|"Loopback requests carried through control API"| Relay
+    Relay <--> Gateway
+    Worker -->|"Extract submission and request independent grading"| Verifier
+    Pi -->|"Generated submission and tool events"| Worker
+    Verifier -->|"Trusted task verdicts"| Worker
+    Worker -->|"Save paired comparison and next checkpoint"| Store
+    Store -->|"Prior results, including rejected changes"| Optimizer
+    Store --> Publish
+    Publish -->|"Poll progress and graph updates"| UI
+    Reaper --> Sandboxes
+    Reaper --> Store
+```
+
+Each branch represents an executed harness version, not a separate model or one API call. The optimizer proposes 2–6 distinct changes from a selected parent. Pi runs each candidate and a fresh parent comparison on the same benchmark and model settings. A candidate is accepted only when its complete paired task pass rate improves. Rejected changes remain in the evidence used for later proposals. New rounds continue from eligible versions; operator controls, provider availability and resource allowances can pause execution.
+
+For Token Factory Sandboxes, Pi sends inference requests to a loopback relay. The trusted controller carries those requests through the sandbox control API to LoopBench's gateway, which calls Nemotron and records usage. This lets the guest run without external networking or a real Nebius API key. Private acceptance tests run only in the fresh verifier. E2B remains an alternative execution provider, fixed when a campaign starts.
+
+The implementation is in [sandbox execution](hosted/tokenfactory-sandboxes.ts), [inference gateway](hosted/gateway.ts), [optimizer](hosted/optimizer.ts), [evolution worker](hosted/worker.ts) and [publication](hosted/publication.ts). See [the Token Factory execution design](docs/TOKEN-FACTORY-SANDBOXES.md) for the request sequence and isolation details.
+
+### Architecture narration · approximately 35 seconds
+
+> LoopBench uses NVIDIA Nemotron in two roles: it powers the Pi coding agent, and it analyzes mistakes to propose competing harness improvements. Both use Nebius Token Factory inference through our gateway, which protects API keys and records token usage. Token Factory Sandboxes run each candidate and its parent in clean environments. A separate verifier checks their solutions against private tests. LoopBench saves every outcome and feeds the evidence into the next round. The tree shows measured harness evolution. Today, the controller runs on localhost; AI execution runs in Nebius.
+
 Token Factory Sandboxes is now an execution option alongside E2B. A real pinned Pi 1.4.0 / Node v24.15.0 image, offline controller probe, six-task baseline and Nemotron-generated sibling hypotheses have run on the whitelisted project. New experiments default to Token Factory. Each lineage keeps its original provider. See [Token Factory execution](docs/TOKEN-FACTORY-SANDBOXES.md) and [validation](docs/VALIDATION.md).
 
 Public tree pages follow newer published checkpoints, including fresh-parent progress and waiting reasons. Original snapshots remain immutable and can be inspected separately.
