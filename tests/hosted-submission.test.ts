@@ -348,7 +348,7 @@ async function missingAttempt(
         return mode === "call_limit";
       },
       async completedProviderCallsConfirmed() {
-        return false;
+        return mode === "success";
       },
     },
   );

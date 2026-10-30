@@ -13,7 +13,8 @@ import {
   canonicalSubmissionPolicy,
 } from "./task-workspaces";
 import { startPi, collectPiExecution, type PiModel } from "./pi";
-import { verifySubmission } from "./verifier";
+import { verifySubmission, type verifierOutcomePolicySchema } from "./verifier";
+import type { z } from "zod";
 import {
   canGradeSettledCallLimit,
   canGradeSettledOutputLimit,
@@ -33,6 +34,7 @@ export interface TaskAttemptInput {
   gatewayOrigin: string;
   agentIntentId: string;
   verifierIntentId: string;
+  verifierOutcomePolicy?: z.infer<typeof verifierOutcomePolicySchema>;
 }
 export interface TaskAttemptResult {
   attemptId: string;
@@ -55,6 +57,7 @@ export interface TaskAttemptContext {
   /** Durable worker heartbeat/cancellation checkpoint. Default polling only delays locally. */
   poll?(): Promise<void>;
   scopedCallLimitConfirmed?(): Promise<boolean>;
+  /** Authenticated gateway settlement for this attempt. Omission fails closed. */
   completedProviderCallsConfirmed?(): Promise<boolean>;
 }
 export async function runTaskAttempt(
@@ -147,9 +150,11 @@ export async function runTaskAttempt(
       collected.state,
       (await context.scopedCallLimitConfirmed?.()) ?? false,
     );
+    const completedProviderCalls =
+      (await context.completedProviderCallsConfirmed?.()) ?? false;
     const outputBounded = canGradeSettledOutputLimit(
       collected.state,
-      (await context.completedProviderCallsConfirmed?.()) ?? false,
+      completedProviderCalls,
     );
     result.terminationReason = outputBounded
       ? "output_token_limit"
@@ -162,6 +167,14 @@ export async function runTaskAttempt(
         : "PI_EXECUTION_FAILED";
       throw new Error("Pi did not finish with successful settled execution");
     }
+    // Pi can receive a usable final answer before the provider's terminal usage
+    // frame arrives. Local settlement alone does not prove the gateway outcome.
+    if (collected.success && !completedProviderCalls)
+      throw new HostedError(
+        "RECONCILIATION_REQUIRED",
+        "Provider calls require confirmed completion before benchmark verification.",
+        503,
+      );
     const frozen = await agent.remote.run(
       "pkill -KILL -u user || test $? -eq 1",
       { user: "root", timeoutMs: 5000 },
@@ -199,13 +212,34 @@ export async function runTaskAttempt(
       benchmarkHash: input.benchmarkHash,
       benchmarkPath: input.benchmarkPath,
       nodeVersion: input.harness.runtime.nodeVersion,
+      outcomePolicy: input.verifierOutcomePolicy,
     });
-    await artifact("verifier-result", JSON.stringify(verdict));
+    if (verdict.status === "infrastructure_failed") {
+      const { diagnostic, resourceExhaustion, ...ownerVerdict } = verdict;
+      await artifact("verifier-result", JSON.stringify(ownerVerdict));
+      await artifact(
+        "platform-diagnostic",
+        JSON.stringify({
+          attemptId: input.attemptId,
+          source: "trusted_verifier",
+          ...diagnostic,
+        }),
+      );
+      if (resourceExhaustion)
+        await artifact(
+          "trusted-resource-result",
+          JSON.stringify({ ...resourceExhaustion, attemptId: input.attemptId }),
+        );
+    } else {
+      await artifact("verifier-result", JSON.stringify(verdict));
+    }
     await context.assertFence();
     result.status = verdict.status;
     result.error = verdict.error;
     if (verdict.status === "infrastructure_failed")
-      result.failureCode = "VERIFIER_FAILED";
+      result.failureCode = verdict.resourceExhaustion
+        ? "CANDIDATE_RESOURCE_EXHAUSTED"
+        : "VERIFIER_FAILED";
     await context.event("attempt_result", {
       attemptId: input.attemptId,
       status: result.status,

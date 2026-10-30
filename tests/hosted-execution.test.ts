@@ -735,6 +735,149 @@ test("grader process failures and malformed protocol are infrastructure failures
   assert.equal(result.status, "infrastructure_failed");
 });
 
+for (const scenario of [
+  "confirmed",
+  "bad_preflight",
+  "bad_postflight",
+  "wrong_exit",
+  "legacy",
+] as const) {
+  test(`resource quarantine requires exact heap exit and healthy controls: ${scenario}`, async () => {
+    const benchmark = await loadBenchmark("coding-adversarial-v1");
+    const graderHash = createHash("sha256")
+      .update(await readFile("benchmarks/evaluate.mjs"))
+      .digest("hex");
+    let controls = 0;
+    const result = await verifySubmission({
+      remote: {
+        ...remote,
+        async writeFile() {},
+        async run(command) {
+          if (command === "node --version")
+            return { exitCode: 0, stdout: process.version, stderr: "" };
+          if (command.startsWith("sha256sum"))
+            return { exitCode: 0, stdout: graderHash, stderr: "" };
+          if (command.includes("verifier-control.json")) {
+            controls++;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                passed: !(
+                  (scenario === "bad_preflight" && controls === 1) ||
+                  (scenario === "bad_postflight" && controls === 2)
+                ),
+                error: null,
+              }),
+              stderr: "",
+            };
+          }
+          return {
+            exitCode: scenario === "wrong_exit" ? 1 : 134,
+            stdout: "PRIVATE-HIDDEN-OUTPUT",
+            stderr:
+              "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory PRIVATE-HIDDEN-INPUT",
+          };
+        },
+      },
+      submission: {
+        contents: "module.exports=()=>null",
+        sha256: "a".repeat(64),
+        bytes: 22,
+        path: "/home/user/task/src/solution.cjs",
+      },
+      taskId: "strict-csv",
+      benchmarkHash: benchmark.hash,
+      nodeVersion: process.version,
+      outcomePolicy:
+        scenario === "legacy"
+          ? "trusted-verifier-infrastructure-v1"
+          : "trusted-resource-quarantine-v2",
+    });
+    assert.equal(result.status, "infrastructure_failed");
+    if (result.status !== "infrastructure_failed")
+      throw Error("Expected unscored outcome");
+    assert.equal(Boolean(result.resourceExhaustion), scenario === "confirmed");
+    if (scenario === "confirmed") {
+      assert.equal(controls, 2);
+      assert.equal(result.resourceExhaustion?.graderSha256, graderHash);
+      assert.equal(result.resourceExhaustion?.submissionHash, "a".repeat(64));
+    }
+    if (scenario === "legacy") assert.equal(controls, 0);
+    assert.equal(JSON.stringify(result).includes("PRIVATE-"), false);
+  });
+}
+
+for (const stage of [
+  "runtime",
+  "prepare_grader",
+  "prepare_input",
+  "integrity",
+  "execution",
+  "decode",
+] as const) {
+  test(`verifier reports safe ${stage} stage without adapter secrets or hidden grader output`, async () => {
+    const benchmark = await loadBenchmark("coding-adversarial-v1");
+    const privateSentinel = "SECRET-AND-HIDDEN-INPUT-SENTINEL";
+    const graderHash = createHash("sha256")
+      .update(await readFile("benchmarks/evaluate.mjs"))
+      .digest("hex");
+    const result = await verifySubmission({
+      remote: {
+        ...remote,
+        async writeFile(path) {
+          if (
+            (stage === "prepare_grader" && path.endsWith("evaluate.mjs")) ||
+            (stage === "prepare_input" && path.endsWith("input.json"))
+          )
+            throw Object.assign(new Error(privateSentinel), { code: "EPIPE" });
+        },
+        async run(command) {
+          if (command === "node --version") {
+            if (stage === "runtime")
+              throw Object.assign(new Error(privateSentinel), {
+                code: "EAGAIN",
+              });
+            return { exitCode: 0, stdout: process.version, stderr: "" };
+          }
+          if (command.startsWith("sha256sum"))
+            return {
+              exitCode: 0,
+              stdout: stage === "integrity" ? privateSentinel : graderHash,
+              stderr: "",
+            };
+          return {
+            exitCode: stage === "execution" ? 1 : 0,
+            stdout: privateSentinel,
+            stderr: privateSentinel,
+          };
+        },
+      },
+      submission: {
+        contents: "module.exports=()=>[]",
+        sha256: "a".repeat(64),
+        bytes: 22,
+        path: "/home/user/task/src/solution.cjs",
+      },
+      taskId: "strict-csv",
+      benchmarkHash: benchmark.hash,
+      nodeVersion: process.version,
+    });
+    assert.equal(result.status, "infrastructure_failed");
+    if (result.status !== "infrastructure_failed")
+      throw Error("Expected infrastructure failure");
+    assert.equal(result.diagnostic?.stage, stage);
+    if (stage === "execution") {
+      assert.equal(result.diagnostic.processExitCode, 1);
+      assert.equal(result.diagnostic.processFailure, "nonzero_exit");
+    }
+    assert.equal(JSON.stringify(result).includes(privateSentinel), false);
+    assert.equal(
+      JSON.stringify(result).includes(JSON.stringify(benchmark.tasks[0].cases)),
+      false,
+    );
+  });
+}
+
 test("attempt admission/grant failures retain categories and clean up owned resources before returning", async () => {
   const benchmark = await loadBenchmark("coding-adversarial-v1");
   const sim = simulator();
@@ -908,7 +1051,11 @@ async function childProcess(args: string[], input = "") {
     },
   );
 }
-test("finite attempt uses real child-process event fixture and immutable evaluator in a fresh verifier transport", async () => {
+async function finiteAttemptWithProviderCompletion(
+  providerCompletion: boolean | undefined,
+  verifierFailure = false,
+  resourceQuarantine = false,
+) {
   // Explicit protocol fixture, NOT a real Pi/model/E2B run. E2B control plane is simulated.
   const benchmark = await loadBenchmark("coding-adversarial-v1");
   const sim = simulator();
@@ -1002,6 +1149,20 @@ test("finite attempt uses real child-process event fixture and immutable evaluat
         };
       if (command.includes("--permission")) {
         verifierStarted = true;
+        if (command.includes("verifier-control.json"))
+          return {
+            exitCode: 0,
+            stdout: '{"passed":true,"error":null}',
+            stderr: "",
+          };
+        if (verifierFailure)
+          return {
+            exitCode: resourceQuarantine ? 134 : 1,
+            stdout: "PRIVATE-GRADER-OUTPUT",
+            stderr: resourceQuarantine
+              ? "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory PRIVATE-ADAPTER-SECRET"
+              : "PRIVATE-ADAPTER-SECRET",
+          };
         assert.equal(
           verifierFiles.has("/opt/loopbench/run/config.json"),
           false,
@@ -1040,7 +1201,11 @@ test("finite attempt uses real child-process event fixture and immutable evaluat
     skills: [],
     tools: "read-write-edit-bash",
     verificationPolicy: "public-smoke",
-    compaction: { enabled: false, reserveTokens: 4096, keepRecentTokens: 8192 },
+    compaction: {
+      enabled: false,
+      reserveTokens: 4096,
+      keepRecentTokens: 8192,
+    },
     runtime: {
       piVersion: "1.4.0",
       nodeVersion: "v24.15.0",
@@ -1066,10 +1231,17 @@ test("finite attempt uses real child-process event fixture and immutable evaluat
         taskId: "dependency-layers",
         benchmarkHash: benchmark.hash,
         harness,
-        model: { id: "fixture-model", contextWindow: 32768, maxTokens: 4096 },
+        model: {
+          id: "fixture-model",
+          contextWindow: 32768,
+          maxTokens: 4096,
+        },
         gatewayOrigin: "https://gateway.example.invalid",
         agentIntentId: "agent-intent",
         verifierIntentId: "verifier-intent",
+        verifierOutcomePolicy: resourceQuarantine
+          ? "trusted-resource-quarantine-v2"
+          : "trusted-verifier-infrastructure-v1",
       },
       {
         sandboxes: sim.context,
@@ -1089,8 +1261,65 @@ test("finite attempt uses real child-process event fixture and immutable evaluat
           return kind;
         },
         async assertFence() {},
+        ...(providerCompletion === undefined
+          ? {}
+          : {
+              async completedProviderCallsConfirmed() {
+                return providerCompletion;
+              },
+            }),
       },
     );
+    if (providerCompletion !== true) {
+      assert.equal(result.status, "infrastructure_failed");
+      assert.equal(result.failureCode, "RECONCILIATION_REQUIRED");
+      assert.equal(result.submissionHash, null);
+      assert.equal(verifierStarted, false);
+      assert.equal(artifacts.has("submission"), false);
+      assert.equal(artifacts.has("pi-events"), true);
+      assert.equal(events.includes("attempt_verifying"), false);
+      assert.equal(sim.creates(), 1);
+      assert.equal(sim.records.size, 0);
+      assert.equal(result.cleanupPending, false);
+      assert.equal(revoked, true);
+      return;
+    }
+    if (verifierFailure) {
+      assert.equal(result.status, "infrastructure_failed");
+      assert.equal(
+        result.failureCode,
+        resourceQuarantine ? "CANDIDATE_RESOURCE_EXHAUSTED" : "VERIFIER_FAILED",
+      );
+      assert.equal(
+        JSON.parse(artifacts.get("platform-diagnostic") ?? "{}").stage,
+        "execution",
+      );
+      assert.equal(
+        JSON.parse(artifacts.get("platform-diagnostic") ?? "{}")
+          .processExitCode,
+        resourceQuarantine ? 134 : 1,
+      );
+      if (resourceQuarantine) {
+        const proof = JSON.parse(
+          artifacts.get("trusted-resource-result") ?? "{}",
+        );
+        assert.equal(proof.submissionHash, result.submissionHash);
+        assert.equal(proof.healthyBefore, true);
+        assert.equal(proof.healthyAfter, true);
+        assert.equal(proof.attemptId, "attempt");
+        assert.equal(
+          artifacts.get("verifier-result")?.includes("resourceExhaustion"),
+          false,
+        );
+      }
+      assert.equal(
+        artifacts.get("verifier-result")?.includes("diagnostic"),
+        false,
+      );
+      assert.equal(JSON.stringify([...artifacts]).includes("PRIVATE-"), false);
+      assert.equal(sim.records.size, 0);
+      return;
+    }
     assert.equal(result.status, "passed");
     assert.equal(result.cleanupPending, false);
     assert.equal(revoked, true);
@@ -1116,4 +1345,18 @@ test("finite attempt uses real child-process event fixture and immutable evaluat
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-});
+}
+
+test("finite attempt uses real child-process event fixture and immutable evaluator in a fresh verifier transport", () =>
+  finiteAttemptWithProviderCompletion(true));
+
+test("attempt persists safe verifier stage in its internal diagnostic artifact", () =>
+  finiteAttemptWithProviderCompletion(true, true));
+
+test("attempt persists a separate trusted unscored resource receipt without exposing private verifier bytes", () =>
+  finiteAttemptWithProviderCompletion(true, true, true));
+
+for (const providerCompletion of [false, undefined]) {
+  test(`ordinary successful Pi settlement refuses verification when provider completion is ${String(providerCompletion)}`, () =>
+    finiteAttemptWithProviderCompletion(providerCompletion));
+}
