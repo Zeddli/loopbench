@@ -1,5 +1,7 @@
 # Validation evidence
 
+Latest snapshot: [Live validation, 30 October 2026](LIVE-VALIDATION-2026-10-30.md). The dated sections below preserve earlier evidence; their test counts and running statuses are historical, including the 136-test checkpoint.
+
 ## Token Factory and stuck-tree diagnosis, 29 October 2026
 
 The reported `e99ffa32` branch had completed all six tasks and was rejected. Its open URL referenced an older immutable publication showing one completed task. The page now follows newer explicitly published checkpoints from that same public campaign and can return to the original snapshot. Publishing fingerprints include task and phase progress, with safe counters for fresh-parent evaluations, so an unchanged harness graph no longer hides measured work.

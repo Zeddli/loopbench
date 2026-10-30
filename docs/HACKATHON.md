@@ -1,5 +1,11 @@
 # Nebius and NVIDIA demonstration
 
+LoopBench runs real NVIDIA Nemotron inference through Nebius Token Factory and executes Pi in Token Factory Sandboxes. In the sixteen-call campaign `876e9ddd…`, accepted child `e7ca9a1c…` passed 2/6 tasks against a fresh parent at 1/6, above its original same-condition 0/6 baseline. This is a modest verified paired gain, not benchmark mastery or a general coding claim. Rejected siblings and an independently observed resource-quarantine continuation remain visible.
+
+Use the [filming runbook](DEMO-RUNBOOK.md) and [latest validation](LIVE-VALIDATION-2026-10-30.md) for current evidence. The quality campaign completed two rounds and is now executing the first fresh parent for two valid round-three hypotheses after approved source review; no new round-three candidate outcome is claimed. Earlier E2B results and the budget snapshot below are historical, with their original runtime and allowance.
+
+## Historical E2B pilot
+
 LoopBench diagnoses actual mistakes, proposes competing harness changes and evaluates their branches. The hosted pilot has now executed real NVIDIA Nemotron Lightning inference through Nebius Token Factory, with Pi 1.4.0 / Node v24.15.0 in E2B. It completed a six-task baseline and two fresh paired sibling comparisons. Both siblings tied their parent reruns and were rejected; a later infrastructure failure remains unscored. See [Validation evidence](VALIDATION.md) for the recorded outcomes and boundaries.
 
 ## Event requirements checked historically
@@ -11,6 +17,12 @@ The [official rules](https://nebiusglobalaihackathon.devpost.com/rules) require 
 Eligibility depends on the entrant and full rules. This document does not establish personal eligibility, registration or a submitted entry. Recheck the linked pages before submission.
 
 ## What is implemented
+
+The primary current path uses `hosted/models.ts` for live eligible Nemotron discovery, `hosted/gateway.ts` for admitted and metered inference, and `hosted/worker.ts` with Token Factory Sandboxes agent/verifier operations. Pi 1.4.0 and Node v24.15.0 run in the pinned offline guest image; scoped inference travels through the loopback relay. Fresh independent verification establishes each comparison. The live eight-call campaign demonstrated parent-memory quarantine followed by execution of the next sibling, without a fabricated low parent score.
+
+The optimizer can review explicitly approved, owned, hash-matched generated-source excerpts and public behavioral contracts, with hidden cases and expected answers excluded. Only the known agent-facing JavaScript-output boilerplate suffix is stripped from that optimizer view; benchmark definitions and agent README contracts stay unchanged. Its reasoning/output allowance and new 180-second timeout are separate from unchanged parent/candidate settings and 110-second Pi/probe timeouts. Invalid solution-like output and an uncertain body-read timeout remain recorded; the timeout reservation is retained. The completed sixteen-call 2/6 result is measured evidence; neither source review nor proposal generation alone proves improvement. The latest local verification passed all 218 tests and production build v6; all 27 production traces exclude private environment/state and runner-manifest references. These software checks are separate from the measured 2/6 model result. The local controller still needs this laptop awake. Permanent hosting, a submitted public video and Data Lab cloud import are not established.
+
+### Historical E2B implementation checkpoint
 
 The current hosted path uses `hosted/models.ts` for live eligible Nemotron discovery, `hosted/gateway.ts` for every admitted inference request, and `hosted/worker.ts` with Pi/E2B execution and fresh verifier environments. Nemotron supplied both task execution and six actual same-parent proposals. The local production build's public HTTPS graph, node selection and Tree/Stats controls were checked in the in-app browser. Permanent Linux deployment, a public submission video and an actual Data Lab cloud workflow are not established by this evidence.
 
@@ -29,7 +41,11 @@ npm run cli -- adapters
 
 Next, obtain the exact currently available NVIDIA model ID and its input/output prices from the Nebius account or current provider documentation. Do not guess a model alias or copy prices from an old example. The adapter requires all price fields and `maxTokens`; it deliberately has no silently assumed rates.
 
-## Hosted pilot budget
+## Current operator campaign allowances
+
+The quality campaign's explicit inference allowance was raised from 400,000 to 500,000 micro-USD. The eight-call validation campaign remains at 400,000. These are per-campaign admissions, not confirmed Nebius account balances. A timed-out optimizer call retains its unknown reservation; neither a timeout nor an account top-up silently creates free budget.
+
+## Historical hosted pilot budget, 28 October
 
 The approved aggregate inference allowance is USD 0.50. Earlier demo obligations of USD 0.051754 were deducted from the current campaign's limit, leaving USD 0.448246 for that campaign. At the 28 October checkpoint before the final resume, aggregate recorded inference was USD 0.143770 with zero uncertain inference obligations. This dated snapshot is separate from the cumulative USD 100 platform E2B compute ceiling and is not a live spend total or remaining Nebius account balance. The gateway reserves each request before transmission, retains unknown usage and requires explicit allowance changes; a provider top-up does not enlarge an allowance automatically.
 
@@ -57,13 +73,7 @@ The same registered adapter can propose changes by adding `--proposer-adapter ne
 
 ## Demonstration outline
 
-1. Show the actual hosted catalog and six-task scope, with the pinned Pi/Node/E2B runtime and selected Nemotron model.
-2. Show the recorded baseline, six genuine proposals and the two completed fresh-parent comparisons. Preserve both rejected ties.
-3. Select a graph node and show task evidence, separate compute/inference accounting and the retained unscored cleanup failure.
-4. Explain the resumed campaign, retained failures, pending siblings and explicit allowance/resume controls. Additional execution requires remaining admitted budget; a submitted video is still pending.
-5. State that this pilot demonstrates actual provider execution and measured comparisons, with no accepted improvement or completed deep hosted lineage yet.
-
-A convincing demo can show a rejected change. The useful claim is that the tool evaluates and preserves evidence rather than trusting an agent's assertion that it improved.
+Use the [filming and submission runbook](DEMO-RUNBOOK.md) for the current 30 October Token Factory campaign, safe process controls, latest publication pointer and a two-to-three-minute storyboard. Fill its result card only after a completed verified comparison. Earlier E2B demonstrations above remain historical evidence, not the current campaign's measured outcome.
 
 ## Submission checklist
 
