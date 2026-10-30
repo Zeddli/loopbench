@@ -21,6 +21,28 @@ import { loadBenchmark } from "../core/benchmarks";
 import { z } from "zod";
 
 const validation = process.argv.includes("--validation");
+const quality = process.argv.includes("--quality");
+const modelIndex = process.argv.indexOf("--model");
+const requestedModelId =
+  modelIndex < 0
+    ? undefined
+    : z
+        .string()
+        .min(1)
+        .parse(process.argv[modelIndex + 1]);
+if (quality && validation) throw Error("Choose one operator profile");
+const callsIndex = process.argv.indexOf("--max-calls");
+const maxCallsPerTask =
+  callsIndex < 0
+    ? quality
+      ? 16
+      : 8
+    : z.coerce
+        .number()
+        .int()
+        .min(2)
+        .max(24)
+        .parse(process.argv[callsIndex + 1]);
 const siblingIndex = process.argv.indexOf("--max-siblings");
 const maxSiblingBranches =
   siblingIndex === -1
@@ -44,21 +66,32 @@ const maxRounds =
 const context = getHostedContext(),
   identity = await tokenOperatorIdentity(
     context,
-    validation ? "validation" : "pilot",
+    quality ? "quality" : validation ? "validation" : "pilot",
   ),
   ownerScope = identity.session.ownerScope;
 await loadTokenHarness();
-const file = validation
-  ? ".loopbench/hosted/token-validation-pilot.json"
-  : ".loopbench/hosted/token-pilot.json";
-const publishedFile = validation
-  ? ".loopbench/hosted/token-validation-published-live.json"
-  : ".loopbench/hosted/token-published-live.json";
+const file = quality
+  ? ".loopbench/hosted/token-quality-pilot.json"
+  : validation
+    ? ".loopbench/hosted/token-validation-pilot.json"
+    : ".loopbench/hosted/token-pilot.json";
+const publishedFile = quality
+  ? ".loopbench/hosted/token-quality-published-live.json"
+  : validation
+    ? ".loopbench/hosted/token-validation-published-live.json"
+    : ".loopbench/hosted/token-published-live.json";
 let campaign;
 if (process.argv.includes("--resume")) {
   const saved = JSON.parse(await readFile(file, "utf8"));
   campaign = getCampaign({ ownerScope, campaignId: saved.campaignId }, context);
   if (!campaign) throw Error("Token pilot not owned");
+  if (requestedModelId && requestedModelId !== campaign.modelId)
+    throw Error("A resumed campaign must keep its pinned model");
+  if (
+    callsIndex >= 0 &&
+    Number(campaign.config.maxCallsPerTask ?? 8) !== maxCallsPerTask
+  )
+    throw Error("A resumed campaign must keep its pinned model-call bound");
   campaign = controlCampaign(
     {
       ownerScope,
@@ -74,7 +107,9 @@ if (process.argv.includes("--resume")) {
       { ownerScope, credentialId: identity.credentialId },
       context,
     ),
-    model = catalog.models.find((m) => m.id === catalog.selectedModelId);
+    model = catalog.models.find(
+      (m) => m.id === (requestedModelId ?? catalog.selectedModelId),
+    );
   if (!model?.pricingSnapshotId) throw Error("No compatible model");
   campaign = await startHostedCampaign(
     {
@@ -83,9 +118,9 @@ if (process.argv.includes("--resume")) {
       modelId: model.id,
       benchmarkId: "coding-adversarial-v1",
       harnessId: tokenHarnessId,
-      inferenceAllowanceUsdMicros: validation ? 400000n : 500000n,
+      inferenceAllowanceUsdMicros: validation || quality ? 400000n : 500000n,
       acceptedPricingSnapshotId: model.pricingSnapshotId,
-      config: { maxSiblingBranches },
+      config: { maxSiblingBranches, maxCallsPerTask },
       idempotencyKey: randomUUID(),
     },
     context,
@@ -115,6 +150,7 @@ process.stdout.write(
     campaignId: campaign.id,
     model: campaign.modelId,
     maxSiblingBranches: campaign.config.maxSiblingBranches ?? 6,
+    maxCallsPerTask: campaign.config.maxCallsPerTask ?? 8,
   }) + "\n",
 );
 try {
@@ -177,7 +213,7 @@ try {
             id: campaign.id,
             domain: "coding",
             model: campaign.modelId,
-            harness: "Pi 1.4.0 · Token Factory Sandboxes",
+            harness: `Pi 1.4.0 · Token Factory Sandboxes · ${campaign.config.maxCallsPerTask ?? 8} calls/task`,
             benchmarkId: first.config.benchmarkId,
             benchmarkHash: first.config.benchmarkHash,
             totalTasks: first.totalTasks,
