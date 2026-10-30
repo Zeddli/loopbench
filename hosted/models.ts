@@ -86,6 +86,21 @@ export function selectCheapestModel(
       })[0] ?? null
   );
 }
+export function isMinimumCostModel(
+  catalog: Pick<ModelCatalog, "models">,
+  modelId: string,
+): boolean {
+  const lowest = selectCheapestModel({ catalog });
+  const chosen = catalog.models.find(
+    (model) => model.id === modelId && model.enabled,
+  );
+  return Boolean(
+    lowest &&
+    chosen &&
+    chosen.estimatedWorkloadUsdMicros !== null &&
+    chosen.estimatedWorkloadUsdMicros === lowest.estimatedWorkloadUsdMicros,
+  );
+}
 export function parseModelCatalog(
   data: unknown,
   input: { ownerScope: string; credentialId: string },
@@ -112,8 +127,8 @@ export function parseModelCatalog(
           throw new Error("Unpriced request dimension");
         const snapshot = savePricingSnapshot(
           {
-          ownerScope: input.ownerScope,
-          credentialId: input.credentialId,
+            ownerScope: input.ownerScope,
+            credentialId: input.credentialId,
             modelId: model.id,
             promptUsdPerToken: model.pricing.prompt,
             completionUsdPerToken: model.pricing.completion,

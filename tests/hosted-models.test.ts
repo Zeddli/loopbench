@@ -1,8 +1,55 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture } from "./hosted-foundation-fixture";
-import { parseModelCatalog, selectCheapestModel } from "../hosted/models";
+import {
+  parseModelCatalog,
+  selectCheapestModel,
+  isMinimumCostModel,
+} from "../hosted/models";
 import { tokenCostUsdMicros, getPricingSnapshot } from "../hosted/pricing";
+
+test("a reviewed model tied for the lowest price remains selectable without permitting higher prices", () => {
+  const f = fixture();
+  try {
+    const c = f.campaign();
+    const make = (cost: string) =>
+      parseModelCatalog(
+        {
+          data: [
+            {
+              id: "nvidia/Nemotron-3_5-Lightning",
+              pricing: { prompt: "0.00000006", completion: "0.00000024" },
+            },
+            {
+              id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+              pricing: { prompt: cost, completion: "0.00000024" },
+            },
+          ],
+        },
+        { ownerScope: c.ownerScope, credentialId: c.credentialId },
+        f.context,
+      );
+    const tied = make("0.00000006");
+    assert.equal(
+      isMinimumCostModel(tied, "nvidia/Nemotron-3_5-Lightning"),
+      true,
+    );
+    assert.equal(
+      isMinimumCostModel(tied, "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"),
+      true,
+    );
+    assert.equal(
+      isMinimumCostModel(
+        make("0.00000007"),
+        "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      ),
+      false,
+    );
+    assert.equal(isMinimumCostModel(tied, "unknown"), false);
+  } finally {
+    f.close();
+  }
+});
 
 test("live price refresh keeps the accepted rate identity and renews observation without mutating history", () => {
   const f = fixture();

@@ -13,7 +13,7 @@ import {
 } from "./store";
 import { getBudgetSummary } from "./budget";
 import { listArtifacts } from "./artifacts";
-import { listEligibleModels } from "./models";
+import { listEligibleModels, isMinimumCostModel } from "./models";
 import { getPricingSnapshot } from "./pricing";
 import {
   initializeGateway,
@@ -113,7 +113,7 @@ export async function startHostedCampaign(
     },
     context,
   );
-  if (catalog.selectedModelId !== input.modelId)
+  if (!isMinimumCostModel(catalog, input.modelId))
     throw new HostedError(
       "MODEL_NOT_ALLOWED",
       "This pilot uses the cheapest compatible Nemotron. Refresh and select the recommended model.",
