@@ -17,8 +17,8 @@ const requestSchema = z
   .object({
     model: z.string().min(1),
     messages: z.array(z.record(z.string(), z.unknown())).min(1).max(500),
-    max_tokens: z.number().int().min(1).max(8192).optional(),
-    max_completion_tokens: z.number().int().min(1).max(8192).optional(),
+    max_tokens: z.number().int().min(1).max(16384).optional(),
+    max_completion_tokens: z.number().int().min(1).max(16384).optional(),
     stream: z.boolean().optional(),
     stream_options: z.object({ include_usage: z.boolean() }).optional(),
     temperature: z.number().min(0).max(2).optional(),
@@ -111,6 +111,15 @@ export async function handleChatCompletion(
     }
     const text = Buffer.concat(chunks).toString("utf8");
     const body = requestSchema.parse(JSON.parse(text));
+    if (
+      grant.role !== "optimizer" &&
+      (body.max_tokens ?? body.max_completion_tokens ?? 0) > 8192
+    )
+      throw new HostedError(
+        "VALIDATION_ERROR",
+        "This execution role permits at most 8192 output tokens.",
+        422,
+      );
     if (
       body.max_tokens !== undefined &&
       body.max_completion_tokens !== undefined
@@ -342,7 +351,11 @@ export async function handleChatCompletion(
           },
           body: JSON.stringify({
             ...body,
-            chat_template_kwargs: { enable_thinking: false },
+            chat_template_kwargs: {
+              enable_thinking:
+                grant.role === "optimizer" &&
+                body.chat_template_kwargs?.enable_thinking === true,
+            },
             ...(body.stream ? { stream_options: { include_usage: true } } : {}),
           }),
           redirect: "error",

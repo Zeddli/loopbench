@@ -41,7 +41,7 @@ test("nullable provider cache details do not erase known billable usage", async 
   }
 });
 
-function gatewayFixture() {
+function gatewayFixture(role: "pi_attempt" | "optimizer" = "pi_attempt") {
   const f = fixture(),
     campaign = f.campaign();
   const price = savePricingSnapshot(
@@ -65,7 +65,7 @@ function gatewayFixture() {
       campaignId: campaign.id,
       credentialId: campaign.credentialId,
       modelId: campaign.modelId,
-      role: "pi_attempt",
+      role,
       maxCalls: 5,
       lease,
     },
@@ -91,6 +91,54 @@ function gatewayFixture() {
   }
   return { ...f, campaign, grant, lease, request };
 }
+test("only optimizer grants may opt into reasoning without changing Pi comparison protocol", async () => {
+  for (const role of ["pi_attempt", "optimizer"] as const) {
+    const f = gatewayFixture(role);
+    try {
+      const response = await handleChatCompletion(
+        f.request({ chat_template_kwargs: { enable_thinking: true } }),
+        f.context,
+        async (_url, init) => {
+          const sent = JSON.parse(String(init?.body));
+          assert.equal(
+            sent.chat_template_kwargs.enable_thinking,
+            role === "optimizer",
+          );
+          return Response.json({
+            choices: [],
+            usage: { prompt_tokens: 10, completion_tokens: 10 },
+          });
+        },
+      );
+      assert.equal(response.status, 200);
+    } finally {
+      f.close();
+    }
+  }
+});
+test("only optimizer requests may reserve a 16384-token reasoning and answer allowance", async () => {
+  for (const role of ["pi_attempt", "optimizer"] as const) {
+    const f = gatewayFixture(role);
+    let sends = 0;
+    try {
+      const response = await handleChatCompletion(
+        f.request({ max_tokens: 16384 }),
+        f.context,
+        async () => {
+          sends++;
+          return Response.json({
+            choices: [],
+            usage: { prompt_tokens: 10, completion_tokens: 10 },
+          });
+        },
+      );
+      assert.equal(response.status, role === "optimizer" ? 200 : 422);
+      assert.equal(sends, role === "optimizer" ? 1 : 0);
+    } finally {
+      f.close();
+    }
+  }
+});
 test("gateway reserves before send, preserves tool and usage-only SSE, settles exact usage", async () => {
   const f = gatewayFixture();
   try {

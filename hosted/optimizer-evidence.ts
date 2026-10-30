@@ -1,7 +1,96 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { HostedContext } from "./schema";
 import { replayPiLog } from "./pi-events";
 import { trustedResourceReceiptSchema } from "./verifier";
+
+export function optimizerSubmissionEvidence(
+  input: {
+    ownerScope: string;
+    campaignId: string;
+    nodeIds: string[];
+    parentId: string;
+  },
+  context: HostedContext,
+): unknown[] {
+  const ids = z
+    .array(z.string())
+    .max(32)
+    .parse([...new Set(input.nodeIds)]);
+  if (!ids.length) return [];
+  const rows = context.db
+    .prepare(
+      `SELECT node_id,task_id,role,status,result_json FROM hosted_attempts WHERE owner_scope=? AND campaign_id=? AND node_id IN (${ids.map(() => "?").join(",")}) AND role!='parent' AND result_json IS NOT NULL ORDER BY CASE WHEN node_id=? THEN 0 ELSE 1 END,created_at DESC LIMIT 48`,
+    )
+    .all(input.ownerScope, input.campaignId, ...ids, input.parentId);
+  const protectedValues = [
+    context.config.sessionSigningKey,
+    context.config.credentialFingerprintKey,
+    ...Object.values(context.config.vaultKeys),
+    process.env.NEBIUS_API_KEY,
+    process.env.E2B_API_KEY,
+  ].filter(
+    (value): value is string => typeof value === "string" && value.length >= 12,
+  );
+  const modelReceipt = z.object({
+    submissionHash: z.string().regex(/^[a-f0-9]{64}$/),
+    artifacts: z.array(z.uuid()).max(16),
+  });
+  const results: unknown[] = [],
+    seen = new Set<string>();
+  for (const row of rows) {
+    if (results.length >= 12) break;
+    const key = `${row.node_id}/${row.task_id}`;
+    if (seen.has(key)) continue;
+    const receipt = modelReceipt.safeParse(
+      (() => {
+        try {
+          return JSON.parse(String(row.result_json));
+        } catch {
+          return null;
+        }
+      })(),
+    );
+    if (!receipt.success) continue;
+    for (const id of receipt.data.artifacts) {
+      const artifact = context.db
+        .prepare(
+          "SELECT contents,sha256 FROM hosted_artifacts WHERE id=? AND owner_scope=? AND campaign_id=? AND kind='submission' AND visibility='owner' AND state='ready'",
+        )
+        .get(id, input.ownerScope, input.campaignId);
+      if (
+        !(artifact?.contents instanceof Uint8Array) ||
+        artifact.sha256 !== receipt.data.submissionHash
+      )
+        continue;
+      const bytes = Buffer.from(artifact.contents);
+      if (
+        createHash("sha256").update(bytes).digest("hex") !==
+        receipt.data.submissionHash
+      )
+        continue;
+      const code = bytes.toString("utf8");
+      if (
+        protectedValues.some((value) => code.includes(value)) ||
+        /Bearer\s+\S+|(?:api[_-]?key|gateway[_-]?token)\s*[:=]|[A-Za-z0-9_-]{48,}/i.test(
+          code,
+        )
+      )
+        continue;
+      results.push({
+        nodeId: row.node_id,
+        taskId: row.task_id,
+        status: row.status,
+        submissionSha256: receipt.data.submissionHash,
+        source: code.slice(0, 8000),
+        sourceTruncated: code.length > 8000,
+      });
+      seen.add(key);
+      break;
+    }
+  }
+  return results;
+}
 
 function executionSummary(log: string) {
   const parsed = replayPiLog(log);

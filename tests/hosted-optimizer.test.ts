@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { NodeRecord } from "../core/types";
 import { validateHarnessArtifact } from "../hosted/harnesses";
-import { validateProposalSet } from "../hosted/optimizer";
+import {
+  validateProposalSet,
+  bindProposalParent,
+  optimizerResponseContent,
+} from "../hosted/optimizer";
+import { HostedError } from "../hosted/schema";
 
 const harness = validateHarnessArtifact({
   schemaVersion: 1,
@@ -63,6 +68,59 @@ const input = {
   nodes: [parent, { ...parent, id: "other" }],
   harness,
 };
+test("an optimizer that exhausts its output without an answer is a proposal failure, not a runtime outage", () => {
+  assert.throws(
+    () =>
+      optimizerResponseContent({
+        choices: [{ finish_reason: "length", message: { content: null } }],
+      }),
+    (error: unknown) =>
+      error instanceof HostedError &&
+      error.code === "PROPOSAL_INVALID" &&
+      /output limit/.test(error.message),
+  );
+  assert.equal(
+    optimizerResponseContent({
+      choices: [{ finish_reason: "stop", message: { content: "{}" } }],
+    }),
+    "{}",
+  );
+});
+
+test("structured parent binding retains separate cited mistakes and refuses a different parent", () => {
+  const raw = {
+    proposals: [
+      {
+        ...proposal("Read the contract, write a complete function and test.", [
+          "other",
+        ]),
+        parentId: parent.id,
+      },
+    ],
+  };
+  const bound = bindProposalParent(raw, parent.id);
+  const result = validateProposalSet(bound, input);
+  assert.deepEqual(result[0].proposal.learnedFrom, [parent.id, "other"]);
+  assert.throws(
+    () =>
+      bindProposalParent(
+        { proposals: [{ ...raw.proposals[0], parentId: "other" }] },
+        parent.id,
+      ),
+    /parent/i,
+  );
+  assert.throws(
+    () =>
+      validateProposalSet(
+        bindProposalParent(
+          { proposals: [{ ...raw.proposals[0], learnedFrom: ["invented"] }] },
+          parent.id,
+        ),
+        input,
+      ),
+    /unknown/,
+  );
+});
 
 test("optimizer rejects executable ESM guard syntax incompatible with canonical CommonJS", () => {
   assert.throws(
@@ -78,6 +136,27 @@ test("optimizer rejects executable ESM guard syntax incompatible with canonical 
         input,
       ),
     /CommonJS/,
+  );
+});
+
+test("optimizer returns actionable safe feedback for a solution embedded in a harness", () => {
+  assert.throws(
+    () =>
+      validateProposalSet(
+        {
+          proposals: [
+            proposal(
+              "Read the contract, then use module.exports = function(values) { return values; }; and test it.",
+            ),
+          ],
+        },
+        input,
+      ),
+    (error: unknown) =>
+      error instanceof HostedError &&
+      error.code === "PROPOSAL_INVALID" &&
+      /reusable procedure/.test(error.message) &&
+      !error.message.includes("return values"),
   );
 });
 
@@ -112,4 +191,28 @@ test("optimizer accepts an independent reusable procedure grounded in the parent
   );
   assert.equal(rows.length, 1);
   assert.equal(rows[0].harness.runtime.templateId, harness.runtime.templateId);
+});
+
+test("optimizer rejects whitespace-only parent changes and duplicate sibling procedures", () => {
+  assert.throws(
+    () =>
+      validateProposalSet(
+        { proposals: [proposal(`\n ${harness.systemPrompt} \n`)] },
+        input,
+      ),
+    /distinct/,
+  );
+  assert.throws(
+    () =>
+      validateProposalSet(
+        {
+          proposals: [
+            proposal("Read once, implement early, then verify."),
+            proposal("  Read once,\n implement early, then verify.  "),
+          ],
+        },
+        { ...input, width: 2 },
+      ),
+    /distinct/,
+  );
 });

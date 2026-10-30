@@ -9,6 +9,85 @@ import { saveArtifact } from "../hosted/artifacts";
 import * as optimizerEvidence from "../hosted/optimizer-evidence";
 const { optimizerExecutionEvidence } = optimizerEvidence;
 
+test("submission review requires owned hash-matched model output and excludes other artifact kinds and credential-like bytes", () => {
+  const f = fixture();
+  try {
+    initializeEvolution(f.context);
+    const c = f.campaign(),
+      nodeId = randomUUID();
+    const code = "module.exports = values => values.slice().sort();";
+    const add = (kind: string, contents: string, hashMatches = true) => {
+      const a = saveArtifact(
+        {
+          ownerScope: c.ownerScope,
+          campaignId: c.id,
+          kind,
+          contents,
+          visibility: kind === "submission" ? "owner" : "internal_only",
+        },
+        f.context,
+      );
+      f.context.db
+        .prepare(
+          "INSERT INTO hosted_attempts VALUES(?,?,?,?,?,?,'benchmark_failed',?,?,?,?,?)",
+        )
+        .run(
+          randomUUID(),
+          c.ownerScope,
+          c.id,
+          nodeId,
+          "candidate",
+          randomUUID(),
+          JSON.stringify({
+            artifacts: [a.id],
+            submissionHash: hashMatches ? a.sha256 : "a".repeat(64),
+          }),
+          randomUUID(),
+          randomUUID(),
+          f.context.now(),
+          f.context.now(),
+        );
+    };
+    add("submission", code);
+    add("submission", "CORRUPT-SUBMISSION", false);
+    add("verifier-raw", "HIDDEN-ANSWER-CANARY");
+    add(
+      "submission",
+      `module.exports = () => '${f.context.config.sessionSigningKey}';`,
+    );
+    const args = {
+      ownerScope: c.ownerScope,
+      campaignId: c.id,
+      nodeIds: [nodeId],
+      parentId: nodeId,
+    };
+    const rows = optimizerEvidence.optimizerSubmissionEvidence(args, f.context);
+    assert.equal(rows.length, 1);
+    assert.equal(JSON.stringify(rows).includes(code), true);
+    assert.equal(JSON.stringify(rows).includes("CANARY"), false);
+    assert.equal(
+      JSON.stringify(rows).includes(f.context.config.sessionSigningKey),
+      false,
+    );
+    assert.deepEqual(
+      optimizerEvidence.optimizerSubmissionEvidence(
+        { ...args, ownerScope: "foreign" },
+        f.context,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      optimizerEvidence.optimizerSubmissionEvidence(
+        { ...args, campaignId: randomUUID() },
+        f.context,
+      ),
+      [],
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("optimizer receives bounded execution facts from owned attempts, never log content", () => {
   const f = fixture();
   try {
