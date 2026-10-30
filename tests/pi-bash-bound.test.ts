@@ -57,29 +57,40 @@ test("platform bash bound supplies omitted timeout, caps oversized requests and 
   assert.match(headers["X-LoopBench-Request-Key"], /^[a-f0-9-]{36}$/);
 });
 
-test("supported Pi bash timeout kills a real nonterminating process and allows a following repair command", async (t) => {
-  const piPath =
-    "C:/nvm4w/nodejs/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/bash.js";
-  const shellPath = "C:/Program Files/Git/bin/bash.exe";
-  try {
-    await access(piPath);
-    await access(shellPath);
-  } catch {
-    t.skip("Local pinned Pi/Git Bash integration unavailable on this host");
-    return;
-  }
-  const pi = await import(pathToFileURL(piPath).href),
-    hook = (await platformHandlers()).get("tool_call");
-  assert.ok(hook);
-  const bash = pi.createBashTool(process.cwd(), { shellPath });
-  const input: Record<string, unknown> = {
-    command: "while true; do sleep 1; done",
-    timeout: 0.1,
-  };
-  hook({ toolName: "bash", input });
-  await assert.rejects(bash.execute("bounded-process", input), /timed out/);
-  const repair: Record<string, unknown> = { command: "printf repaired" };
-  hook({ toolName: "bash", input: repair });
-  const result = await bash.execute("following-repair", repair);
-  assert.equal(result.content[0].text, "repaired");
-});
+test(
+  "supported Pi bash timeout interrupts a real overlong process and allows a following repair command",
+  { timeout: 15000 },
+  async (t) => {
+    const piPath =
+      "C:/nvm4w/nodejs/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/bash.js";
+    const shellPath = "C:/Program Files/Git/bin/bash.exe";
+    try {
+      await access(piPath);
+      await access(shellPath);
+    } catch {
+      t.skip("Local pinned Pi/Git Bash integration unavailable on this host");
+      return;
+    }
+    const pi = await import(pathToFileURL(piPath).href),
+      hook = (await platformHandlers()).get("tool_call");
+    assert.ok(hook);
+    const bash = pi.createBashTool(process.cwd(), { shellPath });
+    const input: Record<string, unknown> = {
+      // Leave Windows enough time to start Git Bash before requesting its cleanup.
+      // A finite child also prevents a broken external Pi cleanup from hanging CI.
+      command: "sleep 10",
+      timeout: 1,
+    };
+    hook({ toolName: "bash", input });
+    const started = Date.now();
+    await assert.rejects(bash.execute("bounded-process", input), /timed out/);
+    assert.ok(
+      Date.now() - started < 8000,
+      "Pi must interrupt the child before its natural exit",
+    );
+    const repair: Record<string, unknown> = { command: "printf repaired" };
+    hook({ toolName: "bash", input: repair });
+    const result = await bash.execute("following-repair", repair);
+    assert.equal(result.content[0].text, "repaired");
+  },
+);
