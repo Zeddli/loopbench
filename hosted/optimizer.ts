@@ -8,7 +8,10 @@ import {
 } from "./harnesses";
 import { handleChatCompletion } from "./gateway";
 import { saveArtifact } from "./artifacts";
-import { optimizerExecutionEvidence } from "./optimizer-evidence";
+import {
+  optimizerExecutionEvidence,
+  optimizerQuarantinedOutcomes,
+} from "./optimizer-evidence";
 import { issueGatewayToken, revokeGatewayGrant } from "./gateway-tokens";
 import {
   HostedError,
@@ -28,6 +31,37 @@ export const hostedProposalSchema = z
   })
   .strict();
 export type HostedProposal = z.infer<typeof hostedProposalSchema>;
+function boundedEvidenceJson(
+  input: Record<string, unknown> & {
+    evidence: unknown[];
+    executionEvidence: unknown[];
+  },
+) {
+  const payload = {
+    ...input,
+    evidence: [...input.evidence],
+    executionEvidence: [...input.executionEvidence],
+  };
+  let json = JSON.stringify(payload);
+  while (Buffer.byteLength(json) > 100000 && payload.evidence.length > 1) {
+    payload.evidence.splice(1, 1);
+    json = JSON.stringify(payload);
+  }
+  while (
+    Buffer.byteLength(json) > 100000 &&
+    payload.executionEvidence.length > 1
+  ) {
+    payload.executionEvidence.pop();
+    json = JSON.stringify(payload);
+  }
+  if (Buffer.byteLength(json) > 100000)
+    throw new HostedError(
+      "PROPOSAL_INVALID",
+      "Evidence exceeds the bounded optimizer context.",
+      422,
+    );
+  return json;
+}
 async function scopedCompletion(
   input: {
     campaign: Campaign;
@@ -307,12 +341,16 @@ export async function proposeHarnessBranches(
   },
   context: HostedContext,
 ) {
-  const evidence = input.nodes.slice(-32).map((node) => ({
+  const evidence = [
+    input.parent,
+    ...input.nodes.filter((node) => node.id !== input.parent.id).slice(-31),
+  ].map((node) => ({
     id: node.id,
     parentId: node.parentId,
     hypothesis: node.hypothesis,
     status: node.status,
     score: node.score,
+    benchmarkHash: node.config.benchmarkHash,
     comparison: node.comparison
       ? {
           parentScore: node.comparison.parentScore,
@@ -387,7 +425,7 @@ export async function proposeHarnessBranches(
           },
           {
             role: "user",
-            content: JSON.stringify({
+            content: boundedEvidenceJson({
               round: input.round,
               parentId: input.parent.id,
               parentHarness: input.harness.systemPrompt,
@@ -440,8 +478,15 @@ export async function proposeHarnessBranches(
                 },
                 context,
               ),
+              quarantinedComparisons: optimizerQuarantinedOutcomes(
+                {
+                  ownerScope: input.campaign.ownerScope,
+                  campaignId: input.campaign.id,
+                },
+                context,
+              ),
               evidence,
-            }).slice(0, 100000),
+            }),
           },
         ],
         response_format: {

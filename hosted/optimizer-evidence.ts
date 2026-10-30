@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { HostedContext } from "./schema";
 import { replayPiLog } from "./pi-events";
+import { trustedResourceReceiptSchema } from "./verifier";
 
 function executionSummary(log: string) {
   const parsed = replayPiLog(log);
@@ -182,7 +183,29 @@ export function optimizerExecutionEvidence(
       /* Missing/corrupt evidence is unknown, never invented as zero work. */
     }
     let execution: ReturnType<typeof executionSummary> | null = null;
+    let resourceOutcome:
+      { resourceCategory: "heap_exhausted"; unscored: true } | undefined;
     for (const artifactId of receipt?.artifacts ?? []) {
+      const resource = context.db
+        .prepare(
+          "SELECT contents FROM hosted_artifacts WHERE id=? AND owner_scope=? AND campaign_id=? AND kind='trusted-resource-result' AND visibility='internal_only' AND state='ready'",
+        )
+        .get(artifactId, input.ownerScope, input.campaignId);
+      if (resource?.contents instanceof Uint8Array) {
+        try {
+          if (
+            trustedResourceReceiptSchema.safeParse(
+              JSON.parse(Buffer.from(resource.contents).toString("utf8")),
+            ).success
+          )
+            resourceOutcome = {
+              resourceCategory: "heap_exhausted",
+              unscored: true,
+            };
+        } catch {
+          /* No raw outcome text crosses this boundary. */
+        }
+      }
       const artifact = context.db
         .prepare(
           "SELECT contents FROM hosted_artifacts WHERE id=? AND owner_scope=? AND campaign_id=? AND kind='pi-events' AND visibility='internal_only' AND state='ready'",
@@ -211,6 +234,44 @@ export function optimizerExecutionEvidence(
       modelCallsUsed: typeof calls?.used === "number" ? calls.used : null,
       modelCallLimit: typeof calls?.bound === "number" ? calls.bound : null,
       execution,
+      ...(resourceOutcome ? { resourceOutcome } : {}),
     };
   });
+}
+
+export function optimizerQuarantinedOutcomes(
+  input: { ownerScope: string; campaignId: string },
+  context: HostedContext,
+) {
+  return context.db
+    .prepare(
+      "SELECT p.parent_id,p.proposal_json,p.round,p.ordinal,o.outcome_json FROM hosted_proposal_outcomes o JOIN hosted_proposals p ON p.owner_scope=o.owner_scope AND p.campaign_id=o.campaign_id AND p.round=o.round AND p.ordinal=o.ordinal WHERE o.owner_scope=? AND o.campaign_id=? ORDER BY p.round DESC,p.ordinal DESC LIMIT 24",
+    )
+    .all(input.ownerScope, input.campaignId)
+    .flatMap((row) => {
+      try {
+        const outcome = z
+          .object({
+            outcome: z.literal("quarantined"),
+            failurePhase: z.enum(["parent", "candidate"]),
+            resourceCategory: z.literal("heap_exhausted"),
+            unscored: z.literal(true),
+          })
+          .parse(JSON.parse(String(row.outcome_json)));
+        const proposal = z
+          .object({ hypothesis: z.string().max(500) })
+          .parse(JSON.parse(String(row.proposal_json)));
+        return [
+          {
+            parentId: String(row.parent_id),
+            hypothesis: proposal.hypothesis,
+            round: Number(row.round),
+            ordinal: Number(row.ordinal),
+            ...outcome,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
 }

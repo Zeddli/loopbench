@@ -1,4 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { projectRoot } from "../core/store";
+import {
+  legacyVerifierOutcomePolicy,
+  verifierOutcomePolicy,
+  verifierOutcomePolicySchema,
+  trustedResourceReceiptSchema,
+} from "./verifier";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { loadBenchmark } from "../core/benchmarks";
@@ -80,6 +89,7 @@ const checkpointSchema = z.object({
   roundEnvelopeId: z.string().optional(),
   mastered: z.boolean().default(false),
   executionContextHash: z.string().optional(),
+  verifierOutcomePolicy: verifierOutcomePolicySchema.optional(),
 });
 type Checkpoint = z.infer<typeof checkpointSchema>;
 export interface WorkerDependencies {
@@ -109,12 +119,21 @@ function nodeById(nodes: NodeRecord[], id: string | null): NodeRecord {
   if (!node) throw new Error("Missing version ancestry");
   return node;
 }
+function siblingCap(campaign: Campaign) {
+  return z
+    .number()
+    .int()
+    .min(2)
+    .max(6)
+    .parse(campaign.config.maxSiblingBranches ?? 6);
+}
 function executionContextHash(input: {
   benchmarkHash: string;
   modelId: string;
   harness: HarnessArtifact;
   maxCalls: number;
   tokenFactory: boolean;
+  verifierOutcomePolicy: z.infer<typeof verifierOutcomePolicySchema>;
 }) {
   // loadBenchmark's hash includes the task definition, grader and controller bytes.
   return createHash("sha256")
@@ -130,6 +149,9 @@ function executionContextHash(input: {
         provider: input.tokenFactory ? "tokenfactory" : "e2b",
         inferenceProtocol: "nebius-non-thinking-v1",
         submissionPolicy: canonicalSubmissionPolicy,
+        ...(input.verifierOutcomePolicy === legacyVerifierOutcomePolicy
+          ? {}
+          : { verifierOutcomePolicy: input.verifierOutcomePolicy }),
       }),
     )
     .digest("hex");
@@ -201,11 +223,14 @@ function createNode(input: {
         comparisonId: input.id,
         instructions: input.harness.systemPrompt,
         agentCallLimit: String(input.campaign.config.maxCallsPerTask ?? 8),
+        maxSiblingBranches: String(siblingCap(input.campaign)),
         submissionPolicy: canonicalSubmissionPolicy,
         completionPolicy:
           "settled output requires a canonical submission; trusted missing-leaf receipts fail the task, available artifacts receive fresh verification; provider failures never scored",
         inferenceProtocol: "nebius-non-thinking-v1",
         executionContextHash: input.point.executionContextHash ?? "",
+        verifierOutcomePolicy:
+          input.point.verifierOutcomePolicy ?? legacyVerifierOutcomePolicy,
       },
     },
     status: "running",
@@ -291,6 +316,112 @@ async function refreshPrices(campaign: Campaign, context: HostedContext) {
       campaign.pricingConsentRevision,
     );
 }
+async function hasTrustedResourceOutcome(
+  result: TaskAttemptResult,
+  expected: { attemptId: string; benchmarkHash: string; nodeVersion: string },
+  lease: Lease,
+  context: HostedContext,
+) {
+  if (
+    result.failureCode !== "CANDIDATE_RESOURCE_EXHAUSTED" ||
+    result.cleanupPending ||
+    !result.submissionHash
+  )
+    return false;
+  const savedSubmission = result.artifacts.some((id) =>
+    Boolean(
+      context.db
+        .prepare(
+          "SELECT id FROM hosted_artifacts WHERE id=? AND owner_scope=? AND campaign_id=? AND kind='submission' AND state='ready' AND sha256=?",
+        )
+        .get(id, lease.ownerScope, lease.campaignId, result.submissionHash),
+    ),
+  );
+  if (!savedSubmission) return false;
+  const graderSha256 = createHash("sha256")
+    .update(
+      await readFile(path.join(projectRoot, "benchmarks", "evaluate.mjs")),
+    )
+    .digest("hex");
+  for (const id of result.artifacts) {
+    const row = context.db
+      .prepare(
+        "SELECT contents FROM hosted_artifacts WHERE id=? AND owner_scope=? AND campaign_id=? AND kind='trusted-resource-result' AND visibility='internal_only' AND state='ready'",
+      )
+      .get(id, lease.ownerScope, lease.campaignId);
+    if (!(row?.contents instanceof Uint8Array)) continue;
+    try {
+      const parsed = trustedResourceReceiptSchema.safeParse(
+        JSON.parse(Buffer.from(row.contents).toString("utf8")),
+      );
+      if (
+        parsed.success &&
+        parsed.data.attemptId === expected.attemptId &&
+        parsed.data.submissionHash === result.submissionHash &&
+        parsed.data.benchmarkHash === expected.benchmarkHash &&
+        parsed.data.graderSha256 === graderSha256 &&
+        parsed.data.nodeVersion === expected.nodeVersion
+      )
+        return true;
+    } catch {
+      /* Untrusted or malformed claims never authorize skipping a comparison. */
+    }
+  }
+  return false;
+}
+async function advanceSibling(
+  point: Checkpoint,
+  campaign: Campaign,
+  lease: Lease,
+  context: HostedContext,
+) {
+  point.taskIndex = 0;
+  point.parentTasks = [];
+  point.candidateTasks = [];
+  point.activeNodeId = null;
+  point.proposalIndex++;
+  const siblings = Number(
+    context.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM hosted_proposals WHERE campaign_id=? AND round=?",
+      )
+      .get(campaign.id, point.round)?.n ?? 0,
+  );
+  if (point.proposalIndex < siblings) {
+    point.phase = "parent";
+    checkpoint(lease, point, context);
+    return;
+  }
+  if (point.mastered) {
+    const next = await generateCurriculumBenchmark({
+      baseBenchmarkPath: "coding-adversarial-v1",
+      level: point.level + 1,
+      seed: campaign.id,
+      dataDirectory: process.env.LOOPBENCH_PRIVATE_DATA_ROOT,
+      pinnedLevels: point.failedLevels,
+    });
+    point.level++;
+    point.benchmarkPath = next.path;
+    point.phase = "challenge";
+  } else point.phase = "propose";
+  withHostedTransaction(context.db, () => {
+    if (point.roundEnvelopeId) {
+      releaseReservation(
+        {
+          ownerScope: lease.ownerScope,
+          reservationId: point.roundEnvelopeId,
+          reason:
+            "Completed sibling round; child sandbox obligations retained separately",
+          lease,
+        },
+        context,
+      );
+      delete point.roundEnvelopeId;
+    }
+    delete point.executionContextHash;
+    checkpoint(lease, point, context);
+  });
+}
 /** One durable step. Long-running Pi work is supervised remotely and heartbeats independently. */
 export async function runHostedStep(
   lease: Lease,
@@ -300,6 +431,7 @@ export async function runHostedStep(
   initializeEvolution(context);
   assertLease(lease, context);
   let campaign = campaignFor(lease, context);
+  const maxSiblingBranches = siblingCap(campaign);
   if (campaign.desiredControl !== "run") {
     revokeCampaignGatewayGrants(campaign.id, context);
     const count = Number(
@@ -429,13 +561,18 @@ export async function runHostedStep(
     point.benchmarkPath ?? "coding-adversarial-v1",
   );
   const nodes = listVersionNodes(lease, context);
+  point.verifierOutcomePolicy ??= verifierOutcomePolicySchema.parse(
+    campaign.config.verifierOutcomePolicy ??
+      (nodes.length ? legacyVerifierOutcomePolicy : verifierOutcomePolicy),
+  );
   if (point.phase === "propose") {
     const parent = nodeById(nodes, point.championId),
       harness = getVersionHarness({ ...lease, nodeId: parent.id }, context);
     const sameSuite = nodes.filter(
       (node) => node.config.benchmarkHash === benchmark.hash,
     );
-    const width = adaptiveBranchCount(sameSuite);
+    const adaptiveWidth = adaptiveBranchCount(sameSuite);
+    const width = Math.min(maxSiblingBranches, adaptiveWidth);
     const bound = tokenFactory
       ? null
       : sandboxLifetimeBound(context) *
@@ -508,7 +645,13 @@ export async function runHostedStep(
         {
           ...lease,
           type: "round.proposed",
-          payload: { round: point.round, parentId: parent.id, width },
+          payload: {
+            round: point.round,
+            parentId: parent.id,
+            width,
+            adaptiveWidth,
+            maxSiblingBranches,
+          },
           lease,
         },
         context,
@@ -566,6 +709,7 @@ export async function runHostedStep(
     harness,
     maxCalls: Number(campaign.config.maxCallsPerTask ?? 8),
     tokenFactory,
+    verifierOutcomePolicy: point.verifierOutcomePolicy,
   });
   const anchor =
     nodes.find((node) => node.id === versionId) ??
@@ -584,6 +728,10 @@ export async function runHostedStep(
           harness: getVersionHarness({ ...lease, nodeId: anchor.id }, context),
           maxCalls: Number(anchor.config.settings.agentCallLimit ?? 8),
           tokenFactory: anchor.config.adapterId === "tokenfactory-pi",
+          verifierOutcomePolicy: verifierOutcomePolicySchema.parse(
+            anchor.config.settings.verifierOutcomePolicy ??
+              legacyVerifierOutcomePolicy,
+          ),
         })
       : undefined);
   if (recordedContextHash && recordedContextHash !== currentContextHash)
@@ -651,8 +799,16 @@ export async function runHostedStep(
       "A previous task was interrupted. Its sandbox must be reconciled before a deliberate retry.",
       503,
     );
+  const previousResource =
+    previous?.status === "infrastructure_failed" &&
+    previous.result_json &&
+    z
+      .object({ failureCode: z.literal("CANDIDATE_RESOURCE_EXHAUSTED") })
+      .safeParse(JSON.parse(String(previous.result_json))).success;
   const recovered =
-    previous && ["passed", "benchmark_failed"].includes(String(previous.status))
+    previous &&
+    (["passed", "benchmark_failed"].includes(String(previous.status)) ||
+      previousResource)
       ? z
           .object({
             attemptId: z.string(),
@@ -747,6 +903,7 @@ export async function runHostedStep(
         gatewayOrigin: `${context.config.gatewayOrigin.replace(/\/$/, "")}/api/inference/v1`,
         agentIntentId,
         verifierIntentId,
+        verifierOutcomePolicy: point.verifierOutcomePolicy,
       },
       {
         sandboxes: tokenFactory
@@ -794,7 +951,9 @@ export async function runHostedStep(
               kind,
               contents,
               visibility:
-                kind === "pi-events" || kind === "platform-diagnostic"
+                kind === "pi-events" ||
+                kind === "platform-diagnostic" ||
+                kind === "trusted-resource-result"
                   ? "internal_only"
                   : "owner",
             },
@@ -845,6 +1004,90 @@ export async function runHostedStep(
       attemptId,
       lease.ownerScope,
     );
+  if (
+    point.verifierOutcomePolicy === verifierOutcomePolicy &&
+    (point.phase === "parent" || point.phase === "candidate") &&
+    (await hasTrustedResourceOutcome(
+      result,
+      {
+        attemptId,
+        benchmarkHash: benchmark.hash,
+        nodeVersion: harness.runtime.nodeVersion,
+      },
+      lease,
+      context,
+    ))
+  ) {
+    const error =
+      "Submission exhausted the memory allowance; comparison remains unscored.";
+    withHostedTransaction(context.db, () => {
+      const active = listVersionNodes(lease, context).find(
+        (node) => node.id === versionId,
+      );
+      if (active?.status === "running")
+        persistNode(
+          {
+            ...active,
+            status: "failed",
+            score: null,
+            comparison: null,
+            error,
+            completedAt: new Date().toISOString(),
+          },
+          harness,
+          lease,
+          context,
+        );
+      if (point.phase === "candidate")
+        context.db
+          .prepare(
+            "UPDATE hosted_proposals SET node_id=? WHERE owner_scope=? AND campaign_id=? AND round=? AND ordinal=?",
+          )
+          .run(
+            versionId,
+            lease.ownerScope,
+            campaign.id,
+            point.round,
+            point.proposalIndex,
+          );
+      context.db
+        .prepare(
+          "INSERT INTO hosted_proposal_outcomes VALUES(?,?,?,?,?) ON CONFLICT(owner_scope,campaign_id,round,ordinal) DO NOTHING",
+        )
+        .run(
+          lease.ownerScope,
+          campaign.id,
+          point.round,
+          point.proposalIndex,
+          JSON.stringify({
+            outcome: "quarantined",
+            failurePhase: point.phase,
+            error,
+            resourceCategory: "heap_exhausted",
+            unscored: true,
+            attemptId,
+          }),
+        );
+      appendCampaignEvent(
+        {
+          ...lease,
+          type: "comparison.unscored",
+          payload: {
+            round: point.round,
+            ordinal: point.proposalIndex,
+            failurePhase: point.phase,
+            outcome: "quarantined",
+            resourceCategory: "heap_exhausted",
+            attemptId,
+          },
+          lease,
+        },
+        context,
+      );
+    });
+    await advanceSibling(point, campaign, lease, context);
+    return;
+  }
   if (result.status === "infrastructure_failed" || result.cleanupPending) {
     // Infrastructure failures do not become benchmark wrong answers or accepted comparisons.
     withHostedTransaction(context.db, () => {
@@ -987,48 +1230,7 @@ export async function runHostedStep(
       point.championId = versionId;
   }
   point.mastered ||= score === 1 || parentScore === 1;
-  point.parentTasks = [];
-  point.activeNodeId = null;
-  point.proposalIndex++;
-  const siblings = Number(
-    context.db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM hosted_proposals WHERE campaign_id=? AND round=?",
-      )
-      .get(campaign.id, point.round)?.n ?? 0,
-  );
-  if (point.proposalIndex < siblings) {
-    point.phase = "parent";
-    checkpoint(lease, point, context);
-    return;
-  }
-  if (point.roundEnvelopeId) {
-    releaseReservation(
-      {
-        ownerScope: lease.ownerScope,
-        reservationId: point.roundEnvelopeId,
-        reason:
-          "Completed sibling round; child sandbox obligations retained separately",
-        lease,
-      },
-      context,
-    );
-    delete point.roundEnvelopeId;
-  }
-  if (point.mastered) {
-    const next = await generateCurriculumBenchmark({
-      baseBenchmarkPath: "coding-adversarial-v1",
-      level: point.level + 1,
-      seed: campaign.id,
-      dataDirectory: process.env.LOOPBENCH_PRIVATE_DATA_ROOT,
-      pinnedLevels: point.failedLevels,
-    });
-    point.level++;
-    point.benchmarkPath = next.path;
-    point.phase = "challenge";
-  } else point.phase = "propose";
-  delete point.executionContextHash;
-  checkpoint(lease, point, context);
+  await advanceSibling(point, campaign, lease, context);
 }
 export function waitReasonFor(error: unknown): WaitReason {
   if (!(error instanceof HostedError)) return "runtime_unavailable";

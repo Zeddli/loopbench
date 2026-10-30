@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { fixture } from "./hosted-foundation-fixture";
 import { controlCampaign, getCampaignProjection } from "../hosted/evolution";
@@ -314,18 +315,24 @@ test("legacy partial baseline derives its execution pin from the saved version b
     const current = await f.step();
     const legacyCheckpoint = { ...current.checkpoint };
     delete legacyCheckpoint.executionContextHash;
+    delete legacyCheckpoint.verifierOutcomePolicy;
     f.context.db
       .prepare("UPDATE campaigns SET checkpoint_json=? WHERE id=?")
       .run(JSON.stringify(legacyCheckpoint), f.campaign.id);
     const baseline = listVersionNodes(f.input, f.context)[0];
     assert(baseline);
     delete baseline.config.settings.executionContextHash;
+    delete baseline.config.settings.verifierOutcomePolicy;
     f.context.db
       .prepare("UPDATE hosted_versions SET node_json=? WHERE id=?")
       .run(JSON.stringify(baseline), baseline.id);
     const resumed = await f.step();
     assert.equal(resumed.checkpoint.taskIndex, 2);
     assert.equal(typeof resumed.checkpoint.executionContextHash, "string");
+    assert.equal(
+      resumed.checkpoint.verifierOutcomePolicy,
+      "trusted-verifier-infrastructure-v1",
+    );
   } finally {
     f.close();
   }
@@ -363,6 +370,47 @@ test("invalid optimizer hypotheses receive metered-step feedback without inserti
     f.close();
   }
 });
+
+test("operator sibling cap measures two siblings while preserving the adaptive default", async () => {
+  const f = fullSchedulerFixture();
+  try {
+    f.context.db
+      .prepare("UPDATE campaigns SET config_json=? WHERE id=?")
+      .run(JSON.stringify({ maxSiblingBranches: 2 }), f.campaign.id);
+    let current = await f.step();
+    while (current.checkpoint.phase !== "propose") current = await f.step();
+    current = await f.step();
+    assert.equal(current.checkpoint.phase, "parent");
+    assert.equal(f.proposals[0]?.width, 2);
+    assert.equal(getCampaignProjection(f.input, f.context).proposals.length, 2);
+    assert.equal(
+      listVersionNodes(f.input, f.context)[0]?.config.settings
+        .maxSiblingBranches,
+      "2",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+for (const invalidCap of [1, 7, 2.5, "2"]) {
+  test(`invalid operator sibling cap fails before an optimizer request: ${String(invalidCap)}`, async () => {
+    const f = fullSchedulerFixture();
+    try {
+      f.context.db
+        .prepare("UPDATE campaigns SET config_json=? WHERE id=?")
+        .run(JSON.stringify({ maxSiblingBranches: invalidCap }), f.campaign.id);
+      f.advance(100);
+      await workerTick("invalid-branch-cap", f.context, f.dependencies);
+      assert.equal(getCampaign(f.input, f.context)?.status, "waiting");
+      assert.equal(f.proposals.length, 0);
+      assert.equal(f.attempts.length, 0);
+      assert.equal(f.probeCount(), 0);
+    } finally {
+      f.close();
+    }
+  });
+}
 
 test("three invalid proposal generations stop at an operator hold without inserting branches", async () => {
   const f = fullSchedulerFixture();
@@ -582,3 +630,220 @@ test("hosted scheduler completes measured sibling rounds past 100 steps and bran
     f.close();
   }
 });
+
+for (const phase of ["parent", "candidate"] as const) {
+  test(`confirmed ${phase} resource exhaustion quarantines the pair without a score and advances siblings`, async () => {
+    const f = fullSchedulerFixture();
+    try {
+      let current = await f.step();
+      while (
+        current.checkpoint.phase !== phase ||
+        current.checkpoint.taskIndex !== 0
+      )
+        current = await f.step();
+      const championId = current.checkpoint.championId;
+      const original = f.dependencies.runTaskAttempt;
+      const graderSha256 = createHash("sha256")
+        .update(await readFile("benchmarks/evaluate.mjs"))
+        .digest("hex");
+      const frozen = f.context.db
+        .prepare(
+          "SELECT harness_json FROM hosted_proposals WHERE campaign_id=? AND round=1 ORDER BY ordinal",
+        )
+        .all(f.campaign.id);
+      f.dependencies.runTaskAttempt = async (request, context) => {
+        const source = "module.exports = () => null;";
+        const submissionHash = createHash("sha256")
+          .update(source)
+          .digest("hex");
+        const submission = await context.saveArtifact(
+          "submission",
+          source,
+          submissionHash,
+        );
+        const proof = {
+          schemaVersion: 1,
+          outcome: "candidate_resource_exhausted",
+          policy: "trusted-resource-quarantine-v2",
+          attemptId: request.attemptId,
+          submissionHash,
+          benchmarkHash: request.benchmarkHash,
+          graderSha256,
+          nodeVersion: request.harness.runtime.nodeVersion,
+          healthyBefore: true,
+          healthyAfter: true,
+          processExitCode: 134,
+          processFailure: "heap_exhausted",
+        };
+        const artifact = await context.saveArtifact(
+          "trusted-resource-result",
+          JSON.stringify(proof),
+          "unused-fixture-hash",
+        );
+        return {
+          attemptId: request.attemptId,
+          taskId: request.taskId,
+          status: "infrastructure_failed",
+          failureCode: "CANDIDATE_RESOURCE_EXHAUSTED",
+          error: "Submission exhausted memory",
+          submissionHash,
+          artifacts: [submission, artifact],
+          cleanupPending: false,
+        };
+      };
+      current = await f.step();
+      assert.equal(current.checkpoint.proposalIndex, 1);
+      assert.equal(current.checkpoint.phase, "parent");
+      assert.equal(current.checkpoint.championId, championId);
+      const projection = getCampaignProjection(f.input, f.context);
+      assert.equal(projection.proposals[0]?.outcome, "quarantined");
+      assert.equal(projection.proposals[0]?.failurePhase, phase);
+      if (phase === "candidate") {
+        const failed = projection.nodes.find(
+          (node) => node.id === projection.proposals[0]?.nodeId,
+        );
+        assert.equal(failed?.status, "failed");
+        assert.equal(failed?.score, null);
+        assert.equal(failed?.comparison, null);
+      } else assert.equal(projection.proposals[0]?.nodeId, null);
+      assert.deepEqual(
+        f.context.db
+          .prepare(
+            "SELECT harness_json FROM hosted_proposals WHERE campaign_id=? AND round=1 ORDER BY ordinal",
+          )
+          .all(f.campaign.id),
+        frozen,
+      );
+      f.dependencies.runTaskAttempt = original;
+      const attempts = f.attempts.length;
+      await f.step();
+      assert.equal(f.attempts.length, attempts + 1);
+    } finally {
+      f.close();
+    }
+  });
+}
+
+test("a claimed resource failure without an owned trusted receipt remains an infrastructure hold", async () => {
+  const f = fullSchedulerFixture();
+  try {
+    let current = await f.step();
+    while (current.checkpoint.phase !== "candidate") current = await f.step();
+    f.dependencies.runTaskAttempt = async (request) => ({
+      attemptId: request.attemptId,
+      taskId: request.taskId,
+      status: "infrastructure_failed",
+      failureCode: "CANDIDATE_RESOURCE_EXHAUSTED",
+      error: "Unproven resource claim",
+      submissionHash: "c".repeat(64),
+      artifacts: [],
+      cleanupPending: false,
+    });
+    f.advance(100);
+    await workerTick("unproven-resource", f.context, f.dependencies);
+    const held = getCampaign(f.input, f.context);
+    assert.equal(held?.status, "waiting");
+    assert.equal(held?.checkpoint.proposalIndex, 0);
+  } finally {
+    f.close();
+  }
+});
+
+for (const condition of [
+  "source_hash",
+  "grader_hash",
+  "unhealthy_control",
+  "legacy_policy",
+  "cleanup_pending",
+  "owner_visibility",
+  "legacy_campaign",
+  "baseline",
+]) {
+  test(`resource outcome cannot advance an unverifiable pair: ${condition}`, async () => {
+    const f = fullSchedulerFixture();
+    try {
+      if (condition === "legacy_campaign")
+        f.context.db
+          .prepare("UPDATE campaigns SET config_json=? WHERE id=?")
+          .run(
+            JSON.stringify({
+              verifierOutcomePolicy: "trusted-verifier-infrastructure-v1",
+            }),
+            f.campaign.id,
+          );
+      let current = await f.step();
+      const phase = condition === "baseline" ? "baseline" : "candidate";
+      while (current.checkpoint.phase !== phase) current = await f.step();
+      f.dependencies.runTaskAttempt = async (request, context) => {
+        const source = "module.exports=()=>null;",
+          submissionHash = createHash("sha256").update(source).digest("hex");
+        const submission = await context.saveArtifact(
+          "submission",
+          source,
+          submissionHash,
+        );
+        const proof = {
+          schemaVersion: 1,
+          outcome: "candidate_resource_exhausted",
+          policy:
+            condition === "legacy_policy"
+              ? "trusted-verifier-infrastructure-v1"
+              : "trusted-resource-quarantine-v2",
+          attemptId: request.attemptId,
+          submissionHash:
+            condition === "source_hash" ? "f".repeat(64) : submissionHash,
+          benchmarkHash: request.benchmarkHash,
+          graderSha256:
+            condition === "grader_hash"
+              ? "f".repeat(64)
+              : createHash("sha256")
+                  .update(await readFile("benchmarks/evaluate.mjs"))
+                  .digest("hex"),
+          nodeVersion: request.harness.runtime.nodeVersion,
+          healthyBefore: true,
+          healthyAfter: condition !== "unhealthy_control",
+          processExitCode: 134,
+          processFailure: "heap_exhausted",
+        };
+        const artifact = await context.saveArtifact(
+          condition === "owner_visibility"
+            ? "owner-resource-result"
+            : "trusted-resource-result",
+          JSON.stringify(proof),
+          "unused",
+        );
+        return {
+          attemptId: request.attemptId,
+          taskId: request.taskId,
+          status: "infrastructure_failed",
+          failureCode: "CANDIDATE_RESOURCE_EXHAUSTED",
+          error: "Resource claim",
+          submissionHash,
+          artifacts: [submission, artifact],
+          cleanupPending: condition === "cleanup_pending",
+        };
+      };
+      f.advance(100);
+      await workerTick(
+        "resource-boundary-regression",
+        f.context,
+        f.dependencies,
+      );
+      assert.equal(getCampaign(f.input, f.context)?.status, "waiting");
+      assert.equal(
+        getCampaignProjection(f.input, f.context).proposals.some(
+          (proposal) => proposal.outcome === "quarantined",
+        ),
+        false,
+      );
+      assert.equal(
+        listVersionNodes(f.input, f.context).some(
+          (node) => node.status === "accepted",
+        ),
+        false,
+      );
+    } finally {
+      f.close();
+    }
+  });
+}

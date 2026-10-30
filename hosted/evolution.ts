@@ -30,6 +30,7 @@ export function initializeEvolution(context: HostedContext): void {
     .exec(`CREATE TABLE IF NOT EXISTS hosted_versions(id TEXT PRIMARY KEY,owner_scope TEXT NOT NULL,campaign_id TEXT NOT NULL,parent_id TEXT,harness_json TEXT NOT NULL,node_json TEXT NOT NULL,created_at INTEGER NOT NULL) STRICT;
   CREATE INDEX IF NOT EXISTS hosted_versions_owner ON hosted_versions(owner_scope,campaign_id,created_at,id);
   CREATE TABLE IF NOT EXISTS hosted_proposals(id TEXT PRIMARY KEY,owner_scope TEXT NOT NULL,campaign_id TEXT NOT NULL,parent_id TEXT NOT NULL,round INTEGER NOT NULL,ordinal INTEGER NOT NULL,proposal_json TEXT NOT NULL,harness_json TEXT NOT NULL,node_id TEXT,UNIQUE(campaign_id,round,ordinal)) STRICT;
+  CREATE TABLE IF NOT EXISTS hosted_proposal_outcomes(owner_scope TEXT NOT NULL,campaign_id TEXT NOT NULL,round INTEGER NOT NULL,ordinal INTEGER NOT NULL,outcome_json TEXT NOT NULL,PRIMARY KEY(owner_scope,campaign_id,round,ordinal)) STRICT;
   CREATE TABLE IF NOT EXISTS hosted_attempts(id TEXT PRIMARY KEY,owner_scope TEXT NOT NULL,campaign_id TEXT NOT NULL,node_id TEXT NOT NULL,role TEXT NOT NULL,task_id TEXT NOT NULL,status TEXT NOT NULL,result_json TEXT,agent_intent_id TEXT NOT NULL,verifier_intent_id TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL) STRICT;
   CREATE TABLE IF NOT EXISTS hosted_sandbox_intents(id TEXT PRIMARY KEY,owner_scope TEXT NOT NULL,campaign_id TEXT NOT NULL,attempt_id TEXT NOT NULL,role TEXT NOT NULL,status TEXT NOT NULL,sandbox_id TEXT,template_id TEXT NOT NULL,reservation_id TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,creation_started_at INTEGER,confirmed_at INTEGER) STRICT;
   CREATE TABLE IF NOT EXISTS hosted_model_probes(campaign_id TEXT PRIMARY KEY,model_id TEXT NOT NULL,pricing_snapshot_id TEXT NOT NULL,verified_at INTEGER NOT NULL) STRICT;`);
@@ -237,7 +238,7 @@ export function getCampaignProjection(
     if (!campaign) throw new HostedError("NOT_FOUND", "Not found.", 404);
     const proposals = context.db
       .prepare(
-        "SELECT parent_id,proposal_json,node_id,round FROM hosted_proposals WHERE owner_scope=? AND campaign_id=? ORDER BY round,ordinal",
+        "SELECT p.parent_id,p.proposal_json,p.node_id,p.round,o.outcome_json FROM hosted_proposals p LEFT JOIN hosted_proposal_outcomes o ON o.owner_scope=p.owner_scope AND o.campaign_id=p.campaign_id AND o.round=p.round AND o.ordinal=p.ordinal WHERE p.owner_scope=? AND p.campaign_id=? ORDER BY p.round,p.ordinal",
       )
       .all(input.ownerScope, input.campaignId)
       .map((row) => ({
@@ -247,6 +248,15 @@ export function getCampaignProjection(
         ).hypothesis,
         nodeId: row.node_id === null ? null : String(row.node_id),
         round: Number(row.round),
+        ...(row.outcome_json
+          ? z
+              .object({
+                outcome: z.literal("quarantined"),
+                failurePhase: z.enum(["parent", "candidate"]),
+                error: z.string().max(300),
+              })
+              .parse(JSON.parse(String(row.outcome_json)))
+          : {}),
       }));
     const taskAttempts = context.db
       .prepare(
@@ -311,6 +321,7 @@ export function getCampaignProjection(
         config: {
           name: campaign.config.name,
           beamWidth: campaign.config.beamWidth,
+          maxSiblingBranches: campaign.config.maxSiblingBranches ?? 6,
         },
         checkpoint: {
           phase: campaign.checkpoint.phase,
