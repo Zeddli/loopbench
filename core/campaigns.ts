@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { dataHome } from "./store";
+import { writeAtomicJson } from "./atomic-json";
 import { campaignSchema, type EvolutionCampaign } from "./types";
 export type { EvolutionCampaign, CampaignProposal } from "./types";
 
@@ -56,12 +57,7 @@ export async function saveCampaign(raw: EvolutionCampaign): Promise<void> {
   )
     throw new Error("Campaign call budget invariant violated");
   const destination = filename(campaign.id);
-  await mkdir(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(campaign, null, 2), {
-    mode: 0o600,
-  });
-  await rename(temporary, destination);
+  await writeAtomicJson(destination, campaign);
 }
 export async function withCampaignLock<T>(
   id: string,

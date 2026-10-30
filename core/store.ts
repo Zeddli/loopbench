@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { writeAtomicJson } from "./atomic-json";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -44,12 +45,6 @@ function safeId(id: string): string {
   if (!/^[a-zA-Z0-9-]{1,100}$/.test(id)) throw new Error("Invalid record ID");
   return id;
 }
-async function atomicJson(destination: string, value: unknown): Promise<void> {
-  await mkdir(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2), { mode: 0o600 });
-  await rename(temporary, destination);
-}
 export async function saveNode(node: NodeRecord): Promise<void> {
   const parsed = nodeRecordSchema.parse(node);
   const destination = path.join(
@@ -77,7 +72,7 @@ export async function saveNode(node: NodeRecord): Promise<void> {
   ) {
     throw new Error("Completed nodes and node identity are immutable");
   }
-  await atomicJson(destination, parsed);
+  await writeAtomicJson(destination, parsed);
 }
 export async function getNode(id: string): Promise<NodeRecord | null> {
   try {
@@ -186,7 +181,7 @@ export async function addAdapter(
     throw new Error(
       "Credentials must be provided through the process environment, never manifest arguments",
     );
-  await atomicJson(
+  await writeAtomicJson(
     path.join(dataHome(), "adapters", `${safeId(manifest.id)}.json`),
     manifest,
   );
