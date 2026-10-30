@@ -53,7 +53,7 @@ export async function loadTokenHarness(
   return validateHarnessArtifact({
     schemaVersion: 1,
     systemPrompt:
-      "Solve the function contract in README.md. Inspect the workspace, write the canonical submission, and run the public smoke check. Check boundary conditions and preserve inputs where required.",
+      "Solve the function contract in the fresh workspace /home/user/task. Read README.md directly and replace the failing placeholder in src/solution.cjs with one complete CommonJS exported function. Save a working implementation early in the bounded model-call allowance. The known workspace also contains test/public-smoke.cjs and package.json; repository discovery, dependency inventories and package installation are unnecessary. Run node test/public-smoke.cjs, inspect any failure and repair the saved implementation within the remaining allowance. Check the contract's boundary conditions and preserve inputs where required. A final prose answer does not replace the saved submission.",
     skills: [],
     tools: "read-write-edit-bash",
     verificationPolicy: "public-smoke-and-review",

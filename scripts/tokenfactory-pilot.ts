@@ -21,6 +21,16 @@ import { loadBenchmark } from "../core/benchmarks";
 import { z } from "zod";
 
 const validation = process.argv.includes("--validation");
+const siblingIndex = process.argv.indexOf("--max-siblings");
+const maxSiblingBranches =
+  siblingIndex === -1
+    ? 6
+    : z.coerce
+        .number()
+        .int()
+        .min(2)
+        .max(6)
+        .parse(process.argv[siblingIndex + 1]);
 const roundsIndex = process.argv.indexOf("--rounds");
 const maxRounds =
   roundsIndex === -1
@@ -75,6 +85,7 @@ if (process.argv.includes("--resume")) {
       harnessId: tokenHarnessId,
       inferenceAllowanceUsdMicros: validation ? 400000n : 500000n,
       acceptedPricingSnapshotId: model.pricingSnapshotId,
+      config: { maxSiblingBranches },
       idempotencyKey: randomUUID(),
     },
     context,
@@ -103,6 +114,7 @@ process.stdout.write(
     event: "token.pilot.started",
     campaignId: campaign.id,
     model: campaign.modelId,
+    maxSiblingBranches: campaign.config.maxSiblingBranches ?? 6,
   }) + "\n",
 );
 try {
