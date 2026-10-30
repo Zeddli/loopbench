@@ -1131,6 +1131,13 @@ export async function runHostedStep(
       result.error ??
         "Task execution did not complete. Check provider calls and runtime availability.",
       503,
+      false,
+      // Gateway grants only admit inference. Their persisted error code loses
+      // reserveBudget's details, so restore that provenance before classifying.
+      code === "BUDGET_NOT_AVAILABLE" &&
+        gatewayError?.last_error_code === "BUDGET_NOT_AVAILABLE"
+        ? { kind: "inference" }
+        : null,
     );
   }
   const taskResult: TaskResult = {

@@ -22,6 +22,8 @@ import { z } from "zod";
 
 const validation = process.argv.includes("--validation");
 const quality = process.argv.includes("--quality");
+// Observe an existing operator campaign without resuming it or spending inference.
+const watchOnly = process.argv.includes("--watch-only");
 const modelIndex = process.argv.indexOf("--model");
 const requestedModelId =
   modelIndex < 0
@@ -81,7 +83,7 @@ const publishedFile = quality
     ? ".loopbench/hosted/token-validation-published-live.json"
     : ".loopbench/hosted/token-published-live.json";
 let campaign;
-if (process.argv.includes("--resume")) {
+if (process.argv.includes("--resume") || watchOnly) {
   const saved = JSON.parse(await readFile(file, "utf8"));
   campaign = getCampaign({ ownerScope, campaignId: saved.campaignId }, context);
   if (!campaign) throw Error("Token pilot not owned");
@@ -92,16 +94,17 @@ if (process.argv.includes("--resume")) {
     Number(campaign.config.maxCallsPerTask ?? 8) !== maxCallsPerTask
   )
     throw Error("A resumed campaign must keep its pinned model-call bound");
-  campaign = controlCampaign(
-    {
-      ownerScope,
-      campaignId: campaign.id,
-      action: "resume",
-      expectedRevision: campaign.revision,
-      operationId: randomUUID(),
-    },
-    context,
-  );
+  if (!watchOnly)
+    campaign = controlCampaign(
+      {
+        ownerScope,
+        campaignId: campaign.id,
+        action: "resume",
+        expectedRevision: campaign.revision,
+        operationId: randomUUID(),
+      },
+      context,
+    );
 } else {
   const catalog = await listEligibleModels(
       { ownerScope, credentialId: identity.credentialId },
@@ -155,10 +158,12 @@ process.stdout.write(
 );
 try {
   while (true) {
-    await workerTick(worker, context, { jobId: String(job.id) });
+    if (!watchOnly)
+      await workerTick(worker, context, { jobId: String(job.id) });
     let current = getCampaign({ ownerScope, campaignId: campaign.id }, context);
     if (!current) throw Error("Missing campaign");
     if (
+      !watchOnly &&
       maxRounds !== null &&
       current.status === "running" &&
       current.checkpoint.phase === "propose" &&
@@ -249,6 +254,7 @@ try {
       );
     }
     if (stopping) {
+      if (watchOnly) break;
       controlCampaign(
         {
           ownerScope,
@@ -261,9 +267,13 @@ try {
       );
       stopping = false;
     }
-    if (["waiting", "paused", "stopped", "failed"].includes(current.status))
+    if (watchOnly && process.argv.includes("--once")) break;
+    if (
+      !watchOnly &&
+      ["waiting", "paused", "stopped", "failed"].includes(current.status)
+    )
       break;
-    await delay(100);
+    await delay(watchOnly ? 1000 : 100);
   }
 } finally {
   context.db.close();

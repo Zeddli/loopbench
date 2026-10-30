@@ -97,6 +97,18 @@ Before restore, close admission and stop worker claims. Restore to a separate da
 
 On normal shutdown, send SIGTERM to the worker and leave the reaper active until cleanup is confirmed. Review `node --import tsx scripts/hosted-status.ts`, logs and provider resources. If a kill response is lost, retain the reservation and slot. Do not delete evidence or manually zero an account to force a restart. Disk-full, integrity failures, unresolved liveness and unknown usage keep admission closed.
 
+## Keep an operator demo tree current
+
+Execution and publication are separate processes. A worker can advance a campaign after the original operator pilot exits, while an old public snapshot still shows fewer branches. For the existing quality-profile campaign, run this publisher in its own terminal:
+
+```powershell
+npm run hosted:token-pilot -- --quality --watch-only
+```
+
+This reads the saved owned campaign and writes sanitized public checkpoints. It does not resume execution, call a model or impose a round limit. It keeps watching through waiting, paused and terminal states; `--once` publishes one observation and exits. The existing public tree's “Follow latest published updates” option follows these checkpoints.
+
+Run `npm run hosted:worker` and `npm run hosted:reaper` separately for execution and reconciliation. The generic worker has no fixed round limit. Use the pilot's `--rounds` option only for deliberately finite validation, not an ongoing demo. A rejected candidate advances to the next saved sibling. Budget, provider and infrastructure pauses retain the remaining proposals and explain why work cannot proceed; they are not completed evolution. Gateway inference-budget failures must display `inference_budget`, not `compute_budget`.
+
 ## Export verified lessons locally
 
 The lesson exporter produces a private, redacted JSONL dataset from complete paired evaluations with matching independent verifier artifacts. It checks owned campaign/version/attempt relationships, benchmark and runtime identity, actual grader evidence and complete task counts. Inference logs alone cannot label a pass. Rows include reusable diagnosis/change/prediction, measured counts and evidence IDs/digests. They omit raw logs, task inputs, expected answers and submissions.

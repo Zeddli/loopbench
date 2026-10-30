@@ -15,6 +15,95 @@ import { HostedError } from "../hosted/schema";
 import type { TaskAttemptResult } from "../hosted/attempts";
 import { savePricingSnapshot } from "../hosted/pricing";
 import { loadBenchmark } from "../core/benchmarks";
+import {
+  getBudgetSummary,
+  reserveBudget,
+  markReservationUncertain,
+} from "../hosted/budget";
+import { handleChatCompletion } from "../hosted/gateway";
+
+test("gateway inference exhaustion retains its budget kind through worker recovery", async () => {
+  const f = fullSchedulerFixture();
+  try {
+    await f.step(); // probe
+    const hold = reserveBudget(
+      {
+        ...f.input,
+        kind: "inference",
+        amountUsdMicros: 10581n,
+        operationId: "historical-unknown",
+        operationKey: "historical-unknown",
+      },
+      f.context,
+    );
+    markReservationUncertain(
+      { ownerScope: f.input.ownerScope, reservationId: hold.id },
+      f.context,
+    );
+    f.context.db
+      .prepare(
+        "UPDATE budget_accounts SET settled_usd_micros=189418 WHERE owner_scope=? AND campaign_id=? AND kind='campaign_inference'",
+      )
+      .run(f.input.ownerScope, f.input.campaignId);
+    const before = getBudgetSummary(f.input, f.context);
+    assert.equal(
+      before.inference.hardLimitUsdMicros -
+        before.inference.settledUsdMicros -
+        before.inference.reservedUsdMicros,
+      1n,
+    );
+    f.dependencies.runTaskAttempt = async (request, context) => {
+      const grant = await context.grant();
+      const response = await handleChatCompletion(
+        new Request(
+          "https://isolated-gateway.example/api/inference/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${grant.token}`,
+              "Content-Type": "application/json",
+              "X-LoopBench-Request-Key": randomUUID(),
+            },
+            body: JSON.stringify({
+              model: f.campaign.modelId,
+              messages: [
+                { role: "user", content: "local admission regression" },
+              ],
+              max_tokens: 4096,
+            }),
+          },
+        ),
+        f.context,
+      );
+      assert.equal(response.status, 429);
+      assert.equal((await response.json()).error.code, "BUDGET_NOT_AVAILABLE");
+      await grant.revoke();
+      return {
+        attemptId: request.attemptId,
+        taskId: request.taskId,
+        status: "infrastructure_failed",
+        error: "Gateway allowance rejected",
+        failureCode: "EXECUTION_FAILED",
+        submissionHash: null,
+        artifacts: [],
+        cleanupPending: false,
+      };
+    };
+    f.advance(100);
+    await workerTick("inference-budget-regression", f.context, f.dependencies);
+    const held = getCampaign(f.input, f.context);
+    assert.equal(held?.status, "waiting");
+    assert.equal(held?.waitReason, "inference_budget");
+    assert.deepEqual(getBudgetSummary(f.input, f.context), before);
+    assert.equal(
+      f.context.db.prepare("SELECT COUNT(*) AS n FROM provider_calls").get()?.n,
+      0,
+    );
+    assert.equal(listVersionNodes(f.input, f.context)[0]?.score, null);
+  } finally {
+    f.close();
+  }
+});
 
 function fullSchedulerFixture() {
   const f = fixture();
